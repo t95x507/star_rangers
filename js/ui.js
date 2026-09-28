@@ -1,6 +1,6 @@
 // DOM user interface: HUD, planet screens, selection, log, galaxy map.
 import * as D from './data.js';
-import { stats, cargoUsed, sysDist, jumpCost, jumpDays, findPlanet, sellPrice, hostileTo, dist } from './sim.js';
+import { stats, cargoUsed, sysDist, jumpCost, jumpDays, findPlanet, sellPrice, hostileTo, dist, planetPos } from './sim.js';
 
 const $ = id => document.getElementById(id);
 const hex = c => '#' + c.toString(16).padStart(6, '0');
@@ -37,21 +37,30 @@ export function players(G) {
     const p = st.players[pid], s = st.ships[pid];
     const loc = !s ? '' : s.jump ? '⇢ ' + st.systems[s.jump.to].name : st.systems[s.sys].name;
     const rd = G.rd && G.rd[pid];
-    h += `<div class="p ${p.online ? '' : 'off'}"><span class="dot" style="background:${hex(p.color)}"></span>${esc(p.name)}${pid === G.me ? ' (вы)' : ''}<span class="st ${rd ? 'ok' : ''}" title="${esc(loc)}">${!p.online ? 'offline' : rd ? (p.ready ? '✔ готов' : '⟳ авто') : 'думает…'}</span></div>`;
+    const [label, ok] = !p.online ? ['offline', 0] : STATUS[rd] || ['думает…', 0];
+    h += `<div class="p ${p.online ? '' : 'off'}"><span class="dot" style="background:${hex(p.color)}"></span>${esc(p.name)}${pid === G.me ? ' (вы)' : ''}<span class="st ${ok ? 'ok' : ''}" title="${esc(loc)}">${label}</span></div>`;
   }
   $('players').innerHTML = h;
   const me = st.players[G.me];
   const bt = $('endturn');
   bt.classList.toggle('ready', !!(me && me.ready));
-  bt.textContent = me && me.ready ? 'Ждём остальных… (отмена)' : 'Конец хода [Пробел]';
-  $('auto').checked = !!(me && me.auto);
+  bt.textContent = me && me.ready ? 'Готов ✔ (отмена)' : 'Конец хода [Пробел]';
 }
+const STATUS = { ready: ['✔ готов', 1], landed: ['🪐 на планете', 1], busy: ['⟳ в пути', 1], jump: ['⇢ прыжок', 1], fight: ['⚔ в бою', 1] };
 
 export function turnInfo(G, animating) {
-  let t = '';
-  if (animating) t = 'Идёт ход…';
-  else if (G.timerEnd) t = 'Авто-ход через ' + Math.max(0, Math.ceil((G.timerEnd - performance.now()) / 1000)) + ' с';
-  $('turninfo').textContent = t;
+  const box = $('bigtimer');
+  const left = G.timerEnd ? Math.max(0, G.timerEnd - performance.now()) : 0;
+  let num, cap, frac;
+  if (animating) { num = '▶'; cap = 'день ' + G.st.day; frac = 1; }
+  else if (G.fast) { num = '⏩'; cap = 'все заняты — время ускорено'; frac = left / 1000; }
+  else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём приказов от всех'; frac = 0; }
+  else { num = Math.ceil(left / 1000); cap = 'до следующего дня'; frac = left / G.timerPeriod; }
+  const key = num + '|' + cap;
+  if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = num; box.querySelector('.cap').textContent = cap; }
+  box.querySelector('.bar i').style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
+  box.classList.toggle('urgent', !animating && !G.fast && G.timerPeriod > 0 && left < 3000);
+  box.classList.toggle('fast', !!G.fast);
 }
 
 export function log(G) {
@@ -64,6 +73,85 @@ export function log(G) {
   const stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
   el.innerHTML = items.slice(-60).map(e => `<div class="${e.to ? 'me' : ''} ${e.chat ? 'chat' : ''}"><span class="day">[${e.day}]</span> ${esc(e.text)}</div>`).join('');
   if (stick) el.scrollTop = el.scrollHeight;
+}
+
+// ---------------------------------------------------------------- ship & cargo
+
+export function openShip(G, on = true) {
+  $('ship').hidden = !on;
+  if (on) ship(G);
+}
+
+const bar = (v, max, col) => `<span class="sbar"><i style="width:${Math.max(0, Math.min(100, v / max * 100))}%;background:${col}"></i></span>`;
+const stars = (list, id) => { const t = D.tierOf(list, id); return '<span class="tier">' + '★'.repeat(t + 1) + '<s>' + '★'.repeat(list.length - t - 1) + '</s></span>'; };
+
+export function ship(G) {
+  if ($('ship').hidden) return;
+  const st = G.st, s = st.ships[G.me];
+  if (!s) return;
+  const S = stats(s);
+  const hull = D.byId(D.HULLS, s.eq.hull), eng = D.byId(D.ENGINES, s.eq.engine), tank = D.byId(D.TANKS, s.eq.tank);
+  const droid = s.eq.droid ? D.byId(D.DROIDS, s.eq.droid) : null;
+  const hpRel = s.hull / S.maxHull;
+  const hpCol = hpRel < 0.3 ? 'var(--bad)' : hpRel < 0.6 ? 'var(--warn)' : 'var(--acc)';
+  const eqValue = [hull, eng, tank, droid].reduce((a, x) => a + (x ? x.price : 0), 0) + s.weapons.reduce((a, w) => a + D.byId(D.WEAPONS, w).price, 0);
+  let h = `<h2 style="color:${hex(s.color)}">${esc(s.name)}</h2><div class="meta">${hull.name} · уничтожено кораблей: ${s.kills} · оснащение ≈ ${fmt(eqValue)} кр${s.wanted > 0 ? ` · <span class="badp">в розыске ${s.wanted} дн.</span>` : ''}</div>`;
+  h += `<div class="stats">
+    <div>Корпус</div><div>${bar(s.hull, S.maxHull, hpCol)}</div><div>${Math.ceil(s.hull)} / ${S.maxHull}</div>
+    <div>Топливо</div><div>${bar(s.fuel, S.maxFuel, '#ffc857')}</div><div>${Math.floor(s.fuel)} / ${S.maxFuel}</div>
+    <div>Трюм</div><div>${bar(cargoUsed(s), S.cargoCap, '#6ab8ff')}</div><div>${cargoUsed(s)} / ${S.cargoCap}</div>
+    <div>Скорость</div><div></div><div>${Math.round(S.speed)} / день</div>
+    <div>Прыжок</div><div></div><div>${S.jumpRange} св.л.</div>
+    <div>Ремонт</div><div></div><div>${S.repair ? '+' + S.repair + ' / день' : '—'}</div>
+  </div>`;
+  const slot = (name, list, it, desc) => `<div class="slot ${it ? '' : 'empty'}"><div class="sn">${name}</div><div class="si">${it ? it.name + ' ' + stars(list, it.id) : 'пусто'}</div><div class="sd">${it ? desc : 'можно купить на верфи'}</div></div>`;
+  h += '<h3>Оборудование</h3><div class="slots">';
+  h += slot('Корпус', D.HULLS, hull, `${hull.hp} брони · трюм ${hull.cargo} · оружейных слотов ${hull.slots}`);
+  h += slot('Двигатель', D.ENGINES, eng, `скорость ${eng.speed} · прыжок ${eng.jump} св.л.`);
+  h += slot('Топливный бак', D.TANKS, tank, `${tank.fuel} ед. топлива`);
+  h += slot('Ремдроид', D.DROIDS, droid, droid ? `чинит ${droid.rep} ед./день` : '');
+  h += '</div><h3>Вооружение</h3><div class="slots">';
+  let dmg = 0;
+  for (let i = 0; i < S.slots; i++) {
+    const W = s.weapons[i] ? D.byId(D.WEAPONS, s.weapons[i]) : null;
+    if (W) dmg += W.dmg;
+    h += `<div class="slot ${W ? '' : 'empty'}"><div class="sn">Слот ${i + 1}</div><div class="si">${W ? `<span style="color:${hex(W.color)}">■</span> ${W.name} ${stars(D.WEAPONS, W.id)}` : 'пусто'}</div><div class="sd">${W ? `урон ${W.dmg} · дальность ${W.range}` : 'можно купить на верфи'}</div></div>`;
+  }
+  h += `</div><div class="meta">Суммарный урон за день: ${dmg}</div>`;
+
+  const sys = s.sys != null && !s.jump ? st.systems[s.sys] : null;
+  const here = s.landed ? findPlanet(st, s.landed) : null;
+  const trade = sys && sys.owner !== 'dom';
+  const goods = D.GOODS.filter(g => s.cargo[g.id]);
+  h += '<h3>Трюм</h3>';
+  if (!goods.length) h += '<div class="meta">Трюм пуст.</div>';
+  else {
+    h += `<table><tr><th>Товар</th><th>Кол-во</th><th>${here ? 'Продать здесь' : 'Базовая цена'}</th><th>Лучшая в системе</th><th></th></tr>`;
+    let total = 0;
+    for (const g of goods) {
+      const q = s.cargo[g.id];
+      const pr = here && trade ? sellPrice(here.prices[g.id]) : g.base;
+      let best = null;
+      if (trade) for (const p of sys.planets) { const v = sellPrice(p.prices[g.id]); if (!best || v > best.v) best = { v, n: p.name }; }
+      total += q * pr;
+      const drop = qty => JSON.stringify({ type: 'drop', good: g.id, qty });
+      h += `<tr><td>${g.name}</td><td>${q}</td><td>${pr} <small style="color:var(--dim)">(${fmt(q * pr)})</small></td>` +
+        `<td>${best ? `<span class="${best.v > pr ? 'good' : ''}">${best.v}</span> <small style="color:var(--dim)">${esc(best.n)}</small>` : '—'}</td>` +
+        `<td><button data-drop='${drop(1)}' title="Выбросить 1">−1</button><button data-drop='${drop(9999)}' title="Выбросить всё за борт">✕</button></td></tr>`;
+    }
+    h += `</table><div class="meta">Оценка груза: ${fmt(total)} кр. Груз, выброшенный в космосе, остаётся контейнером.</div>`;
+  }
+  h += `<div class="meta" style="margin-top:8px">💰 Кредиты: <b style="color:#fff">${fmt(s.credits)}</b></div>`;
+  $('shipbody').innerHTML = h;
+}
+
+export function bindShip(G) {
+  $('shipbtn').onclick = () => openShip(G, $('ship').hidden);
+  $('shipclose').onclick = () => openShip(G, false);
+  $('ship').addEventListener('click', e => {
+    const b = e.target.closest('button[data-drop]');
+    if (b) G.send({ t: 'act', a: JSON.parse(b.dataset.drop) });
+  });
 }
 
 // ---------------------------------------------------------------- planet
@@ -135,39 +223,123 @@ export function bindPlanet(G) {
   });
 }
 
-// ---------------------------------------------------------------- selection
+// ---------------------------------------------------------------- object descriptions (hover + selection)
+
+const RELATION = { enemy: ['враг', 'var(--bad)'], neutral: ['нейтрал', 'var(--dim)'], ally: ['союзник', 'var(--acc)'] };
+
+function relation(me, s) {
+  if (s.kind === 'player') return me.aggro && me.aggro[s.id] ? 'enemy' : 'ally';
+  if (hostileTo(me, s) || hostileTo(s, me)) return 'enemy';
+  return s.kind === 'militia' ? 'ally' : 'neutral';
+}
+
+function activity(st, s) {
+  if (s.landed) { const p = findPlanet(st, s.landed); return 'на планете ' + (p ? p.name : ''); }
+  const o = s.order;
+  if (!o) return s.kind === 'citadel' ? 'охраняет систему' : 'дрейфует';
+  const tgt = o.target && st.ships[o.target];
+  switch (o.type) {
+    case 'attack': return tgt ? 'атакует ' + tgt.name : 'в бою';
+    case 'follow': return tgt ? 'следует за ' + tgt.name : 'летит';
+    case 'land': { const p = findPlanet(st, o.planet); return 'летит на ' + (p ? p.name : 'планету'); }
+    case 'loot': return 'летит к контейнеру';
+    case 'jump': return 'готовится к прыжку в ' + st.systems[o.to].name;
+    default: return 'летит';
+  }
+}
+
+const hpBar = (v, max) => {
+  const r = Math.max(0, Math.min(1, v / max));
+  return `<span class="sbar"><i style="width:${r * 100}%;background:${r < 0.3 ? 'var(--bad)' : r < 0.6 ? 'var(--warn)' : 'var(--acc)'}"></i></span>`;
+};
+
+// Returns HTML describing a ship / planet / loot container, or '' if it is not visible to us.
+export function describe(G, obj) {
+  const st = G.st, me = st.ships[G.me];
+  if (!obj || !me || me.jump) return '';
+  if (obj.type === 'ship') {
+    const s = st.ships[obj.id];
+    if (!s || s.sys !== me.sys || s.jump) return '';
+    const S = stats(s);
+    const [rel, relCol] = RELATION[s.id === G.me ? 'ally' : relation(me, s)];
+    let h = `<div class="t" style="color:${hex(s.color)}">${esc(s.name)} <small style="color:var(--dim)">${D.KIND_NAMES[s.kind]}${s.id === G.me ? ' (вы)' : ''}</small>`;
+    if (s.id !== G.me) h += ` <small style="color:${relCol}">· ${rel}</small>`;
+    h += '</div><div class="d">';
+    h += `<div class="hpline">${hpBar(s.hull, S.maxHull)}<span>${Math.ceil(s.hull)}/${S.maxHull}</span></div>`;
+    h += `${D.byId(D.HULLS, s.eq.hull).name} · ${D.byId(D.ENGINES, s.eq.engine).name} (скорость ${Math.round(S.speed)})`;
+    if (s.eq.droid) h += ` · ${D.byId(D.DROIDS, s.eq.droid).name}`;
+    const ws = s.weapons.map(w => D.byId(D.WEAPONS, w));
+    h += '<br>Оружие: ' + (ws.length ? ws.map(W => `${W.name} <small>(${W.dmg}/${W.range})</small>`).join(', ') + ` · <b>${ws.reduce((a, W) => a + W.dmg, 0)}</b> урона/день` : 'нет');
+    h += `<br>${activity(st, s)}`;
+    if (s.id !== G.me) h += ` · дистанция ${Math.round(dist(s.x, s.y, me.x, me.y))}`;
+    if (s.kind === 'trader' || s.kind === 'pirate') { const q = cargoUsed(s); if (q) h += ` · в трюме ~${q} ед.`; }
+    if (s.kind === 'player' && s.id !== G.me) h += ` · сбито кораблей: ${s.kills}`;
+    if (s.wanted > 0) h += ' · <span class="badp">в розыске</span>';
+    return h + '</div>';
+  }
+  if (obj.type === 'planet') {
+    const p = findPlanet(st, obj.id);
+    if (!p || p.sys !== me.sys) return '';
+    const sys = st.systems[p.sys];
+    let h = `<div class="t">${esc(p.name)} <small style="color:var(--dim)">планета</small></div><div class="d">`;
+    h += `${D.RACES.find(r => r.id === p.race).name} · ${D.ECON[p.econ].name} экономика · техуровень ${p.tech + 1}`;
+    if (sys.owner === 'dom') h += '<br><span class="badp">Оккупирована доминаторами — посадка невозможна</span>';
+    else {
+      const rel = D.GOODS.map(g => ({ g, r: p.prices[g.id] / g.base }));
+      const cheap = rel.filter(x => x.r < 0.8).sort((a, b) => a.r - b.r).slice(0, 3);
+      const dear = rel.filter(x => x.r > 1.2).sort((a, b) => b.r - a.r).slice(0, 3);
+      if (cheap.length) h += '<br>Дёшево: ' + cheap.map(x => `<span class="good">${x.g.name} ${p.prices[x.g.id]}</span>`).join(', ');
+      if (dear.length) h += '<br>Дорого берут: ' + dear.map(x => `<span class="good">${x.g.name} ${sellPrice(p.prices[x.g.id])}</span>`).join(', ');
+      const mine = D.GOODS.filter(g => me.cargo[g.id]).map(g => `${g.name} ${sellPrice(p.prices[g.id])}`);
+      if (mine.length) h += '<br>Ваш груз здесь: ' + mine.join(', ');
+      const eq = [D.HULLS, D.ENGINES, D.WEAPONS].map(l => l[p.tech].name);
+      h += `<br>Верфь: до ${eq.join(', ')}`;
+    }
+    const landed = Object.values(st.ships).filter(s => s.landed === p.id);
+    if (landed.length) h += '<br>На планете: ' + landed.map(s => `<span style="color:${hex(s.color)}">${esc(s.name)}</span>`).join(', ');
+    const [px, py] = planetPos(p, st.day);
+    if (me.landed !== p.id) h += `<br>Дистанция ${Math.round(dist(px, py, me.x, me.y))}`;
+    return h + '</div>';
+  }
+  if (obj.type === 'loot') {
+    const l = st.loot.find(l => l.id === obj.id);
+    if (!l) return '';
+    const items = Object.entries(l.cargo).map(([g, q]) => q + ' ' + D.byId(D.GOODS, g).name);
+    if (l.credits) items.unshift(l.credits + ' кр.');
+    const value = l.credits + Object.entries(l.cargo).reduce((a, [g, q]) => a + q * D.byId(D.GOODS, g).base, 0);
+    return `<div class="t" style="color:#ffcc44">Контейнер</div><div class="d">${items.join(', ') || 'пусто'}<br>Ценность ≈ ${fmt(value)} кр · исчезнет через ${l.ttl} дн. · дистанция ${Math.round(dist(l.x, l.y, me.x, me.y))}</div>`;
+  }
+  return '';
+}
 
 export function selinfo(G) {
   const box = $('selinfo');
   const st = G.st, sel = G.sel, me = st.ships[G.me];
-  if (!sel || !me || me.jump) { box.hidden = true; return; }
-  let h = '';
+  let h = describe(G, sel);
+  if (!h) { box.hidden = true; if (sel && me && !me.jump) G.sel = null; return; }
   const btn = (label, o) => `<button data-order='${JSON.stringify(o)}'>${label}</button>`;
   if (sel.type === 'ship') {
     const s = st.ships[sel.id];
-    if (!s || s.sys !== me.sys || s.jump) { box.hidden = true; G.sel = null; return; }
-    const S = stats(s);
-    const d = Math.round(dist(s.x, s.y, me.x, me.y));
-    h = `<div class="t" style="color:${hex(s.color)}">${esc(s.name)} <small style="color:var(--dim)">${D.KIND_NAMES[s.kind]}${s.id === G.me ? ' (вы)' : ''}</small></div>`;
-    h += `<div class="d">Корпус ${Math.ceil(s.hull)}/${S.maxHull} · ${D.byId(D.HULLS, s.eq.hull).name} · скорость ${Math.round(S.speed)}<br>Оружие: ${s.weapons.map(w => D.byId(D.WEAPONS, w).name).join(', ') || 'нет'} · дистанция ${d}${s.landed ? ' · на планете' : ''}${s.wanted > 0 ? ' · <span class="badp">в розыске</span>' : ''}</div>`;
     if (s.id !== G.me && !s.landed) {
       const peaceful = !hostileTo(me, s) && (s.kind === 'trader' || s.kind === 'militia');
-      h += '<div class="btns">' + btn(peaceful ? '⚠ Атаковать (розыск!)' : '⚔ Атаковать', { type: 'attack', target: s.id }) + btn('Следовать', { type: 'follow', target: s.id }) + '</div>';
+      h += '<div class="btns">' + btn(peaceful ? '⚠ Атаковать (розыск!)' : '⚔ Атаковать', { type: 'attack', target: s.id }) + (s.kind === 'citadel' ? '' : btn('Следовать', { type: 'follow', target: s.id })) + '</div>';
     }
-  } else if (sel.type === 'planet') {
-    const p = findPlanet(st, sel.id);
-    if (!p || p.sys !== me.sys) { box.hidden = true; G.sel = null; return; }
-    h = `<div class="t">${esc(p.name)}</div><div class="d">${D.RACES.find(r => r.id === p.race).name} · ${D.ECON[p.econ].name} · техуровень ${p.tech + 1}</div>`;
-    h += '<div class="btns">' + btn('Сесть', { type: 'land', planet: p.id }) + '</div>';
-  } else if (sel.type === 'loot') {
-    const l = st.loot.find(l => l.id === sel.id);
-    if (!l) { box.hidden = true; G.sel = null; return; }
-    const items = Object.entries(l.cargo).map(([g, q]) => q + ' ' + D.byId(D.GOODS, g).name);
-    if (l.credits) items.unshift(l.credits + ' кр.');
-    h = `<div class="t">Контейнер</div><div class="d">${items.join(', ')} · исчезнет через ${l.ttl} дн.</div><div class="btns">${btn('Подобрать', { type: 'loot', id: l.id })}</div>`;
-  }
-  box.hidden = !h;
+  } else if (sel.type === 'planet') h += '<div class="btns">' + btn('Сесть', { type: 'land', planet: sel.id }) + '</div>';
+  else if (sel.type === 'loot') h += '<div class="btns">' + btn('Подобрать', { type: 'loot', id: sel.id }) + '</div>';
+  box.hidden = false;
   box.innerHTML = h;
+}
+
+// Hover tooltip that follows the cursor over the 3D view.
+export function tooltip(G, hit, x, y) {
+  const tip = $('tip');
+  const h = hit && hit.type !== 'point' ? describe(G, hit) : '';
+  if (!h) { tip.hidden = true; tip.dataset.k = ''; return; }
+  if (tip.dataset.k !== h) { tip.dataset.k = h; tip.innerHTML = h; }
+  tip.hidden = false;
+  const w = tip.offsetWidth, hh = tip.offsetHeight;
+  tip.style.left = Math.min(innerWidth - w - 8, x + 18) + 'px';
+  tip.style.top = (y + 18 + hh > innerHeight ? y - hh - 12 : y + 18) + 'px';
 }
 
 export function bindSel(G) {

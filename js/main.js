@@ -53,8 +53,10 @@ async function startHost(state) {
   for (const id in state.players) state.players[id].online = false;
   G.me = Sim.addPlayer(state, name, color);
   G.peers = new Map();
-  G.turnTimer = 20;
+  G.turnTimer = 10;
   G.turnLock = 0;
+  G.nextTurnAt = performance.now() + G.turnTimer * 1000;
+  G.fastAt = 0;
   document.body.classList.add('is-host');
 
   G.net.onMessage = (peer, m) => {
@@ -96,7 +98,6 @@ function hostHandle(pid, m) {
     case 'order': Sim.setOrder(st, pid, m.o); break;
     case 'act': Sim.act(st, pid, m.a); break;
     case 'ready': pl.ready = !!m.v; break;
-    case 'auto': pl.auto = !!m.v; break;
     case 'chat': st.log.push({ day: st.day, text: pl.name + ': ' + String(m.text).slice(0, 200), to: null, chat: 1 }); break;
   }
   dirty();
@@ -106,22 +107,26 @@ function dirty() { G.dirty = true; }
 
 function readiness() {
   const rd = {};
-  for (const pid in G.st.players) rd[pid] = Sim.playerReady(G.st, pid);
+  for (const pid in G.st.players) rd[pid] = Sim.readyReason(G.st, pid);
   return rd;
 }
 
+// World time is authoritative: a turn fires every G.turnTimer seconds no matter what.
+// If every player is already done (has an order, is landed, or pressed "end turn"),
+// the next turn fires 1 s after the previous animation instead.
+const FAST_PAUSE = 1000;
+
+function allDone(rd) {
+  const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
+  return online.length > 0 && online.every(p => rd[p]);
+}
+
 function hostTick() {
-  const st = G.st, now = performance.now();
+  const now = performance.now();
   if (now >= G.turnLock) {
-    const online = Object.keys(st.players).filter(p => st.players[p].online);
     const rd = readiness();
-    const allReady = online.every(p => rd[p]);
-    const someoneWaiting = online.some(p => st.players[p].ready);
-    if (online.length && allReady) return doTurn();
-    if (G.turnTimer > 0 && someoneWaiting) {
-      if (!G.timerStart) { G.timerStart = now; dirty(); }
-      if (now - G.timerStart > G.turnTimer * 1000) return doTurn();
-    } else if (G.timerStart) { G.timerStart = 0; dirty(); }
+    if (allDone(rd) && now >= G.fastAt) return doTurn();
+    if (G.turnTimer > 0 && now >= G.nextTurnAt) return doTurn();
     if (JSON.stringify(rd) !== JSON.stringify(G.rd)) dirty();
   }
   if (G.dirty) broadcast();
@@ -129,8 +134,10 @@ function hostTick() {
 
 function doTurn() {
   const anim = Sim.resolveTurn(G.st);
-  G.timerStart = 0;
-  G.turnLock = performance.now() + ANIM_MS + 250;
+  const now = performance.now();
+  G.turnLock = now + ANIM_MS;
+  G.fastAt = now + ANIM_MS + FAST_PAUSE;
+  G.nextTurnAt = now + Math.max(G.turnTimer * 1000, ANIM_MS + FAST_PAUSE);
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(G.st)); } catch (e) { /* storage full or blocked */ }
   broadcast(anim);
 }
@@ -139,8 +146,10 @@ function broadcast(anim = null) {
   G.dirty = false;
   const st = G.st;
   if (st.log.length > 150) st.log.splice(0, st.log.length - 150);
-  const timer = G.timerStart ? Math.max(0, G.turnTimer * 1000 - (performance.now() - G.timerStart)) : 0;
-  const msg = { t: 'state', st, anim, rd: readiness(), timer };
+  const now = performance.now(), rd = readiness();
+  const fast = allDone(rd);
+  const timer = G.turnTimer > 0 ? Math.max(0, (fast ? Math.max(G.fastAt, G.turnLock) : G.nextTurnAt) - now) : 0;
+  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast };
   if (G.net.conns.size) G.net.broadcast(msg);
   applyState(msg);
 }
@@ -182,6 +191,8 @@ function applyState(m) {
   G.st = m.st;
   G.rd = m.rd || {};
   G.timerEnd = m.timer ? performance.now() + m.timer : 0;
+  G.timerPeriod = m.period || 0;
+  G.fast = !!m.fast;
   if (m.anim && G.view) G.view.startAnim(m.anim);
   if (!G.view) return;
   const me = G.st.ships[G.me];
@@ -191,7 +202,7 @@ function applyState(m) {
 
 function refreshUI() {
   if (!G.st || !G.st.ships[G.me]) return;
-  UI.hud(G); UI.players(G); UI.planet(G); UI.selinfo(G); UI.log(G); UI.drawMap(G);
+  UI.hud(G); UI.players(G); UI.planet(G); UI.selinfo(G); UI.log(G); UI.drawMap(G); UI.ship(G);
 }
 
 G.order = o => {
@@ -215,10 +226,9 @@ function enterGame() {
   } else $('room').textContent = 'Одиночная игра (офлайн)';
   if (!G.isHost) $('room').innerHTML = `Комната: <b>${G.code}</b>`;
 
-  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G);
+  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G);
   $('endturn').onclick = toggleReady;
-  $('auto').onchange = e => G.send({ t: 'auto', v: e.target.checked });
-  $('timer').onchange = e => { G.turnTimer = +e.target.value; G.timerStart = 0; dirty(); };
+  $('timer').onchange = e => { G.turnTimer = +e.target.value; G.nextTurnAt = performance.now() + G.turnTimer * 1000; dirty(); };
   $('chat').addEventListener('keydown', e => {
     if (e.key === 'Enter') { const t = e.target.value.trim(); if (t) G.send({ t: 'chat', text: t }); e.target.value = ''; e.target.blur(); }
     if (e.key === 'Escape') e.target.blur();
@@ -234,13 +244,17 @@ function enterGame() {
     click(e.clientX, e.clientY);
   });
   cv.addEventListener('contextmenu', e => e.preventDefault());
+  // hover info: remember the cursor, the render loop re-picks it a few times per second
+  cv.addEventListener('pointermove', e => { G.hover = { x: e.clientX, y: e.clientY, drag: e.buttons !== 0, t: G.hover ? G.hover.t : 0 }; });
+  cv.addEventListener('pointerleave', () => { G.hover = null; UI.tooltip(G, null); });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     if (e.code === 'Space') { e.preventDefault(); toggleReady(); }
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
+    else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
     else if (e.code === 'KeyF') { const g = G.view.ships.get(G.me); if (g) G.view.focus(g.position); }
     else if (e.code === 'Enter') $('chat').focus();
-    else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); refreshUI(); }
+    else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); refreshUI(); }
   });
   refreshUI();
   requestAnimationFrame(loop);
@@ -275,9 +289,15 @@ function loop(now) {
   requestAnimationFrame(loop);
   if (!G.st || !G.st.ships[G.me]) return;
   const { animating } = G.view.update(G.st, G.me, G.sel);
+  UI.turnInfo(G, animating);
+  if (G.hover && now - G.hover.t > 120) {
+    G.hover.t = now;
+    const hit = G.hover.drag ? null : G.view.pick(G.hover.x, G.hover.y);
+    UI.tooltip(G, hit, G.hover.x, G.hover.y);
+    G.view.renderer.domElement.style.cursor = hit && hit.type !== 'point' ? 'pointer' : 'crosshair';
+  }
   if (now - lastUi > 250 || wasAnimating !== animating) {
     lastUi = now;
-    UI.turnInfo(G, animating);
     if (wasAnimating && !animating) refreshUI();
     wasAnimating = animating;
   }

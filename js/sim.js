@@ -198,7 +198,7 @@ export function addPlayer(st, name, color) {
   const [x, y] = planetPos(p, st.day);
   const s = makeShip(st, 'player', 0, x, y, { name, color, weapons: ['w1'], credits: 3000 });
   s.landed = p.id;
-  st.players[s.id] = { name, color, ready: false, auto: true, online: true };
+  st.players[s.id] = { name, color, ready: false, online: true };
   log(st, name + ' вступил в ряды рейнджеров.');
   return s.id;
 }
@@ -220,7 +220,17 @@ export function setOrder(st, pid, o) {
 
 export function act(st, pid, a) {
   const s = st.ships[pid];
-  if (!s || !s.landed) return;
+  if (!s) return;
+  if (a.type === 'drop') {
+    const q = Math.min(a.qty, s.cargo[a.good] || 0);
+    if (q <= 0 || s.jump || s.sys == null) return;
+    s.cargo[a.good] -= q;
+    if (!s.cargo[a.good]) delete s.cargo[a.good];
+    if (!s.landed) st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: { [a.good]: q }, ttl: 20 });
+    log(st, 'Выброшено за борт: ' + q + ' ' + D.byId(D.GOODS, a.good).name, pid);
+    return;
+  }
+  if (!s.landed) return;
   const p = findPlanet(st, s.landed);
   const S = stats(s);
   const say = t => log(st, t, pid);
@@ -302,17 +312,22 @@ export function act(st, pid, a) {
 
 // ---------------------------------------------------------------- turn readiness
 
-export function autoReady(st, s) {
-  if (s.jump) return true;
-  if (!s.order || (s.landed && s.order.type === 'land' && s.order.planet === s.landed)) return false;
-  if (!['move', 'land', 'loot', 'follow'].includes(s.order.type)) return false;
-  return !shipsIn(st, s.sys).some(c => c !== s && !c.landed && hostileTo(c, s) && dist(c.x, c.y, s.x, s.y) < 1400);
-}
-export function playerReady(st, pid) {
+// Why a player doesn't hold back time: '' = still thinking (the world waits for the turn timer).
+// Landed players are ignored entirely; a player with an active order counts as done.
+export function readyReason(st, pid) {
   const pl = st.players[pid], s = st.ships[pid];
-  if (!pl || !pl.online || !s) return true;
-  return pl.ready || (pl.auto && autoReady(st, s));
+  if (!pl || !pl.online || !s) return 'off';
+  if (s.jump) return 'jump';
+  if (s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed))) return 'landed';
+  if (pl.ready) return 'ready';
+  if (!s.order) return '';
+  if (s.order.type === 'attack') return 'fight';
+  if (s.order.type === 'jump') return 'busy';
+  // peaceful orders stop counting as "done" once an enemy shows up nearby
+  const danger = shipsIn(st, s.sys).some(c => c !== s && !c.landed && hostileTo(c, s) && dist(c.x, c.y, s.x, s.y) < 1400);
+  return danger ? '' : 'busy';
 }
+export const playerReady = (st, pid) => readyReason(st, pid) !== '';
 
 // ---------------------------------------------------------------- AI
 
