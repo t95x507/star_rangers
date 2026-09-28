@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Звёздные Рейнджеры P2P</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="lobby">
+  <div class="lobby-box">
+    <h1>Звёздные Рейнджеры <span>P2P</span></h1>
+    <p class="sub">Кооперативная космическая пошаговая стратегия. Торгуйте, прокачивайте корабль и вместе с друзьями выбейте доминаторов из галактики.</p>
+    <label>Имя пилота <input id="l-name" maxlength="16"></label>
+    <label>Цвет корабля <input id="l-color" type="color" value="#4cff9a"></label>
+    <div class="row">
+      <button id="l-host" class="primary">Создать игру</button>
+      <button id="l-continue" hidden>Продолжить сохранённую</button>
+    </div>
+    <div class="row">
+      <input id="l-code" placeholder="КОД КОМНАТЫ" maxlength="5">
+      <button id="l-join">Подключиться</button>
+    </div>
+    <div id="l-status"></div>
+    <details>
+      <summary>Как играть</summary>
+      <ul>
+        <li><b>Один ход = один день.</b> Все игроки отдают приказы одновременно, потом день разыгрывается для всех сразу.</li>
+        <li>Ход наступает, когда все нажали <b>«Конец хода»</b> (Пробел). Если кто-то задумался — после первого «готов» запускается таймер.</li>
+        <li>С галочкой <b>«Автоход»</b> вы считаетесь готовым, пока летите к цели и рядом нет врагов — долгие перелёты не тормозят остальных.</li>
+        <li>ЛКМ: по планете — сесть, по врагу — атаковать, по контейнеру — подобрать, по пустоте — лететь. ПКМ — двигать камеру, колесо — зум, СКМ — вращать.</li>
+        <li><b>M</b> — карта галактики и гиперпрыжки, <b>F</b> — к своему кораблю, <b>Enter</b> — чат.</li>
+        <li>На планете: рынок (покупай дёшево, продавай дорого), верфь, ремонт и топливо.</li>
+        <li>Цель: уничтожить все цитадели доминаторов. Они шлют флоты и захватывают соседние системы!</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<div id="ui" hidden>
+  <div id="hud"></div>
+  <div id="side">
+    <div id="room"></div>
+    <div id="players"></div>
+    <div id="turnbox">
+      <button id="endturn">Конец хода</button>
+      <div id="turninfo"></div>
+      <label class="chk"><input type="checkbox" id="auto" checked> Автоход в полёте</label>
+      <label class="chk host-only">Таймер хода
+        <select id="timer"><option value="0">выкл</option><option value="10">10 с</option><option value="20" selected>20 с</option><option value="40">40 с</option><option value="90">90 с</option></select>
+      </label>
+      <button id="mapbtn">Карта галактики [M]</button>
+    </div>
+  </div>
+  <div id="planet" hidden></div>
+  <div id="selinfo" hidden></div>
+  <div id="logbox">
+    <div id="log"></div>
+    <input id="chat" placeholder="Enter — написать в чат" maxlength="200">
+  </div>
+  <div id="hyper" hidden></div>
+  <div id="map" hidden>
+    <canvas id="mapc"></canvas>
+    <div id="mapinfo"></div>
+    <button id="mapclose">✕</button>
+  </div>
+  <div id="toast"></div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
