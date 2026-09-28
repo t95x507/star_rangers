@@ -55,11 +55,11 @@ export const DROIDS = [
   { id: 'd5', name: 'Нанофабрика', rep: 55, price: 60000 },
 ];
 export const WEAPONS = [
-  { id: 'w1', name: 'Лазер', dmg: 14, range: 260, price: 1500, color: 0xff4444 },
+  { id: 'w1', name: 'Лазер', dmg: 16, range: 260, price: 1500, color: 0xff4444 },
   { id: 'w2', name: 'Осколочник', dmg: 24, range: 210, price: 4500, color: 0xffaa33 },
-  { id: 'w3', name: 'Плазмомёт', dmg: 36, range: 290, price: 11000, color: 0x44ffcc },
-  { id: 'w4', name: 'Ракетница', dmg: 52, range: 390, price: 22000, color: 0xffee66 },
-  { id: 'w5', name: 'Аннигилятор', dmg: 85, range: 330, price: 45000, color: 0xcc66ff },
+  { id: 'w3', name: 'Плазмомёт', dmg: 34, range: 290, price: 11000, color: 0x44ffcc },
+  { id: 'w4', name: 'Ракетница', dmg: 46, range: 390, price: 22000, color: 0xffee66 },
+  { id: 'w5', name: 'Аннигилятор', dmg: 64, range: 330, price: 45000, color: 0xcc66ff },
 ];
 
 export const EQ = { hull: HULLS, engine: ENGINES, tank: TANKS, droid: DROIDS };

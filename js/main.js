@@ -136,8 +136,8 @@ function readiness() {
 }
 
 // World time is authoritative: a turn fires every G.turnTimer seconds no matter what.
-// If every player is already done (has an order, is landed, or pressed "end turn"),
-// the next turn fires 1 s after the previous animation instead.
+// If every online player switched "skip" on, the next turn fires 1 s after the previous animation.
+// If every online player sits on a planet (and isn't taking off), time stops completely.
 const FAST_PAUSE = 1000;
 
 function allDone(rd) {
@@ -145,8 +145,23 @@ function allDone(rd) {
   return online.length > 0 && online.every(p => rd[p]);
 }
 
+function allLanded() {
+  const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
+  return online.length > 0 && online.every(p => {
+    const s = G.st.ships[p];
+    return s && s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed));
+  });
+}
+
 function hostTick() {
   const now = performance.now();
+  const paused = allLanded();
+  if (paused !== !!G.paused) {
+    G.paused = paused;
+    if (!paused) G.nextTurnAt = Math.max(now + G.turnTimer * 1000, G.turnLock + 1000); // full turn after unpausing
+    dirty();
+  }
+  if (paused) { if (G.dirty) broadcast(); return; }
   if (now >= G.turnLock) {
     const rd = readiness();
     if (allDone(rd) && now >= G.fastAt) return doTurn();
@@ -173,7 +188,7 @@ function broadcast(anim = null) {
   const now = performance.now(), rd = readiness();
   const fast = allDone(rd);
   const timer = G.turnTimer > 0 ? Math.max(0, (fast ? Math.max(G.fastAt, G.turnLock) : G.nextTurnAt) - now) : 0;
-  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast };
+  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast, paused: !!G.paused };
   if (G.net.conns.size) G.net.broadcast(msg);
   applyState(msg);
 }
@@ -239,6 +254,7 @@ function applyState(m) {
   G.timerEnd = m.timer ? performance.now() + m.timer : 0;
   G.timerPeriod = m.period || 0;
   G.fast = !!m.fast;
+  G.paused = !!m.paused;
   if (m.anim && G.view) G.view.startAnim(m.anim);
   if (!G.view) return;
   const me = G.st.ships[G.me];

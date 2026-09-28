@@ -90,7 +90,7 @@ function makePlanet(st, sysId, r, i) {
 }
 
 export function newGame() {
-  const st = { v: 1, day: 0, nextId: 1, systems: [], ships: {}, loot: [], log: [], players: {}, raidTimer: 30, victory: false };
+  const st = { v: 1, day: 0, nextId: 1, systems: [], ships: {}, loot: [], log: [], players: {}, raidTimer: 60, victory: false };
   const N = 16;
   // grow the galaxy outward so every system is reachable with the starting engine (jump 20)
   let systems = [];
@@ -146,7 +146,7 @@ function makeShip(st, kind, sys, x, y, o = {}) {
   st.ships[id] = s;
   return s;
 }
-const tierNow = st => Math.min(4, Math.floor(st.day / 22));
+const tierNow = st => Math.min(4, Math.floor(st.day / 30));
 const eqT = (t, e = t) => ({ hull: D.HULLS[Math.min(4, t)].id, engine: D.ENGINES[Math.min(4, e)].id, tank: 't2', droid: null });
 function randCargo(n, amt) {
   const c = {};
@@ -166,27 +166,28 @@ function spawnMilitia(st, sys) {
   const p = pick(sys.planets);
   const [x, y] = planetPos(p, st.day);
   const t = Math.min(3, 1 + Math.floor(tierNow(st) / 2));
-  return makeShip(st, 'militia', sys.id, x + 80, y, { name: 'Патруль ' + rint(100, 999), eq: eqT(t, 1), weapons: t > 1 ? ['w2', 'w1'] : ['w1', 'w1'], credits: 200 });
+  return makeShip(st, 'militia', sys.id, x + 80, y, { name: 'Патруль ' + rint(100, 999), eq: eqT(t, 1), weapons: t > 1 ? ['w2', 'w1'] : ['w1'], credits: 200 });
 }
 function spawnPirate(st, sys) {
   const [x, y] = edgePos();
-  const t = Math.min(4, tierNow(st) + rint(0, 1));
+  // pirates roughly match a player of the same stage: a fight should take 4-5 days
+  const t = Math.min(4, tierNow(st) + (R() < 0.25 ? 1 : 0));
   const w = [];
-  for (let i = 0; i <= Math.min(t, 3); i++) w.push(D.WEAPONS[Math.min(4, rint(0, t))].id);
-  return makeShip(st, 'pirate', sys.id, x, y, { name: pick(D.PIRATE_NAMES), eq: eqT(t, Math.min(3, t)), weapons: w, credits: rint(300, 1200) + t * 500, cargo: randCargo(1, [5, 20]) });
+  for (let i = 0; i < 1 + Math.floor(t / 2); i++) w.push(D.WEAPONS[rint(Math.max(0, t - 1), t)].id);
+  return makeShip(st, 'pirate', sys.id, x, y, { name: pick(D.PIRATE_NAMES), eq: eqT(t, Math.min(3, t)), weapons: w, hpMul: 0.7, credits: rint(300, 1200) + t * 500, cargo: randCargo(1, [5, 20]) });
 }
 function spawnDom(st, sys, x, y) {
   const t = Math.min(4, 1 + Math.floor(tierNow(st) / 1.5));
   const w = [];
-  for (let i = 0; i <= Math.min(t, 2); i++) w.push(D.WEAPONS[Math.min(4, rint(1, t))].id);
-  return makeShip(st, 'dom', sys.id, x + rnd(-150, 150), y + rnd(-150, 150), { name: pick(D.DOM_NAMES) + '-' + rint(1, 99), eq: eqT(t, 1), weapons: w, cargo: { tech: rint(3, 12), mins: rint(3, 12) }, credits: 400 });
+  for (let i = 0; i < 1 + Math.floor(t / 2); i++) w.push(D.WEAPONS[rint(Math.max(1, t - 1), t)].id);
+  return makeShip(st, 'dom', sys.id, x + rnd(-150, 150), y + rnd(-150, 150), { name: pick(D.DOM_NAMES) + '-' + rint(1, 99), eq: eqT(t, 1), weapons: w, hpMul: 0.8, cargo: { tech: rint(3, 12), mins: rint(3, 12) }, credits: 400 });
 }
 function captureSystem(st, sys, initial = false) {
   sys.owner = 'dom';
   sys.cap = 0;
   sys.domTimer = 0;
   const a = rnd(0, Math.PI * 2);
-  const c = makeShip(st, 'citadel', sys.id, Math.cos(a) * 420, Math.sin(a) * 420, { name: 'Цитадель', eq: { hull: 'h5', engine: 'e1', tank: 't1', droid: 'd3' }, weapons: ['w4', 'w4', 'w3', 'w3'], hpMul: initial ? 3 : 1.8, spdMul: 0, credits: 5000 });
+  const c = makeShip(st, 'citadel', sys.id, Math.cos(a) * 420, Math.sin(a) * 420, { name: 'Цитадель', eq: { hull: 'h5', engine: 'e1', tank: 't1', droid: 'd3' }, weapons: ['w4', 'w3', 'w3'], hpMul: initial ? 3 : 1.6, spdMul: 0, credits: 5000 });
   sys.citadel = c.id;
   for (let i = 0; i < (initial ? 3 : 1); i++) spawnDom(st, sys, c.x, c.y);
 }
@@ -312,20 +313,14 @@ export function act(st, pid, a) {
 
 // ---------------------------------------------------------------- turn readiness
 
-// Why a player doesn't hold back time: '' = still thinking (the world waits for the turn timer).
-// Landed players are ignored entirely; a player with an active order counts as done.
+function inDanger(st, s) {
+  return shipsIn(st, s.sys).some(c => c !== s && !c.landed && hostileTo(c, s) && dist(c.x, c.y, s.x, s.y) < 1400);
+}
+// Time only speeds up when every online player has switched "skip" on (Space toggles it).
 export function readyReason(st, pid) {
   const pl = st.players[pid], s = st.ships[pid];
   if (!pl || !pl.online || !s) return 'off';
-  if (s.jump) return 'jump';
-  if (s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed))) return 'landed';
-  if (pl.ready) return 'ready';
-  if (!s.order) return '';
-  if (s.order.type === 'attack') return 'fight';
-  if (s.order.type === 'jump') return 'busy';
-  // peaceful orders stop counting as "done" once an enemy shows up nearby
-  const danger = shipsIn(st, s.sys).some(c => c !== s && !c.landed && hostileTo(c, s) && dist(c.x, c.y, s.x, s.y) < 1400);
-  return danger ? '' : 'busy';
+  return pl.ready ? 'skip' : '';
 }
 export const playerReady = (st, pid) => readyReason(st, pid) !== '';
 
@@ -604,7 +599,10 @@ export function resolveTurn(st) {
     p.prices[g.id] = Math.max(5, Math.round(p.prices[g.id] + (target - p.prices[g.id]) * 0.07 + target * rnd(-0.03, 0.03)));
   }
   worldTick(st);
-  for (const id in st.players) st.players[id].ready = false;
+  for (const id in st.players) {
+    const pl = st.players[id], s = st.ships[id];
+    if (pl.ready && s && !s.jump && !s.landed && inDanger(st, s)) { pl.ready = false; log(st, '⚠ Рядом враг — ускорение времени выключено', id); }
+  }
   return anim;
 }
 
@@ -620,8 +618,8 @@ function worldTick(st) {
       const doms = count(sys.id, 'dom');
       if (doms >= 3) {
         sys.cap++;
-        if (sys.cap === 1) log(st, '⚠ Доминаторы атакуют систему ' + sys.name + '! Если их не остановить, система падёт через 7 дней.');
-        if (sys.cap >= 7) { captureSystem(st, sys); log(st, '☠ Система ' + sys.name + ' захвачена доминаторами!'); }
+        if (sys.cap === 1) log(st, '⚠ Доминаторы атакуют систему ' + sys.name + '! Если их не остановить, система падёт через 10 дней.');
+        if (sys.cap >= 10) { captureSystem(st, sys); log(st, '☠ Система ' + sys.name + ' захвачена доминаторами!'); }
       } else sys.cap = Math.max(0, sys.cap - 1);
     } else {
       const c = st.ships[sys.citadel];
@@ -638,13 +636,13 @@ function worldTick(st) {
   }
   // dominator raids
   if (--st.raidTimer <= 0) {
-    st.raidTimer = rint(16, 24) + 3 * st.systems.filter(s => s.owner === 'dom').length;
+    st.raidTimer = rint(25, 35) + 6 * st.systems.filter(s => s.owner === 'dom').length;
     const opts = [];
     for (const sys of st.systems) if (sys.owner === 'dom') for (const nb of neighbors(st, sys.id, 26)) if (nb.owner === 'coal') opts.push([sys, nb]);
     if (opts.length) {
       const [src, dst] = pick(opts);
       const c = st.ships[src.citadel];
-      const group = all.filter(s => s.sys === src.id && s.kind === 'dom').slice(0, 3 + Math.floor(st.day / 40));
+      const group = all.filter(s => s.sys === src.id && s.kind === 'dom').slice(0, 3 + Math.floor(st.day / 80));
       while (group.length < 3 && c) group.push(spawnDom(st, src, c.x, c.y));
       for (const s of group) { s.landed = null; s.order = { type: 'jump', to: dst.id }; }
       log(st, '⚠ Флот доминаторов (' + group.length + ') выдвигается из ' + src.name + ' в сторону ' + dst.name + '!');

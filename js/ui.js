@@ -37,29 +37,30 @@ export function players(G) {
     const p = st.players[pid], s = st.ships[pid];
     const loc = !s ? '' : s.jump ? '⇢ ' + st.systems[s.jump.to].name : st.systems[s.sys].name;
     const rd = G.rd && G.rd[pid];
-    const [label, ok] = !p.online ? ['offline', 0] : STATUS[rd] || ['думает…', 0];
+    const [label, ok] = !p.online ? ['offline', 0] : rd === 'skip' ? ['⏩ ускорить', 1] : ['⏱ обычное', 0];
     h += `<div class="p ${p.online ? '' : 'off'}"><span class="dot" style="background:${hex(p.color)}"></span>${esc(p.name)}${pid === G.me ? ' (вы)' : ''}<span class="st ${ok ? 'ok' : ''}" title="${esc(loc)}">${label}</span></div>`;
   }
   $('players').innerHTML = h;
   const me = st.players[G.me];
   const bt = $('endturn');
   bt.classList.toggle('ready', !!(me && me.ready));
-  bt.textContent = me && me.ready ? 'Готов ✔ (отмена)' : 'Конец хода [Пробел]';
+  bt.textContent = me && me.ready ? '⏩ Ускорение ВКЛ [Пробел]' : '⏱ Ускорить время [Пробел]';
+  bt.title = 'Время ускоряется, только когда ускорение включили все игроки. Нажмите ещё раз, чтобы выключить.';
 }
-const STATUS = { ready: ['✔ готов', 1], landed: ['🪐 на планете', 1], busy: ['⟳ в пути', 1], jump: ['⇢ прыжок', 1], fight: ['⚔ в бою', 1] };
 
 export function turnInfo(G, animating) {
   const box = $('bigtimer');
   const left = G.timerEnd ? Math.max(0, G.timerEnd - performance.now()) : 0;
   let num, cap, frac;
   if (animating) { num = '▶'; cap = 'день ' + G.st.day; frac = 1; }
-  else if (G.fast) { num = '⏩'; cap = 'все заняты — время ускорено'; frac = left / 1000; }
-  else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём приказов от всех'; frac = 0; }
+  else if (G.paused) { num = '⏸'; cap = 'пауза — все на планетах'; frac = 0; }
+  else if (G.fast) { num = '⏩'; cap = 'все включили ускорение'; frac = left / 1000; }
+  else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём, пока все включат ускорение'; frac = 0; }
   else { num = Math.ceil(left / 1000); cap = 'до следующего дня'; frac = left / G.timerPeriod; }
   const key = num + '|' + cap;
   if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = num; box.querySelector('.cap').textContent = cap; }
   box.querySelector('.bar i').style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
-  box.classList.toggle('urgent', !animating && !G.fast && G.timerPeriod > 0 && left < 3000);
+  box.classList.toggle('urgent', !animating && !G.fast && !G.paused && G.timerPeriod > 0 && left < 3000);
   box.classList.toggle('fast', !!G.fast);
 }
 
