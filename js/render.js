@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as D from './data.js';
 import { SUB, planetPos, stats } from './sim.js';
+import { buildShipModel } from './models.js';
 
 export const ANIM_MS = 1700;
 
@@ -39,15 +40,6 @@ function planetTexture(color, seed) {
   g.globalAlpha = 1;
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
-}
-
-function shipGeometry() {
-  const sh = new THREE.Shape();
-  sh.moveTo(48, 0); sh.lineTo(-30, 28); sh.lineTo(-16, 0); sh.lineTo(-30, -28); sh.closePath();
-  const geo = new THREE.ExtrudeGeometry(sh, { depth: 12, bevelEnabled: true, bevelSize: 3, bevelThickness: 3, bevelSegments: 1 });
-  geo.translate(0, 0, -6);
-  geo.rotateX(-Math.PI / 2);
-  return geo;
 }
 
 export class View {
@@ -83,7 +75,6 @@ export class View {
     this.sysGroup = new THREE.Group(); this.scene.add(this.sysGroup);
     this.shipGroup = new THREE.Group(); this.scene.add(this.shipGroup);
     this.fxGroup = new THREE.Group(); this.scene.add(this.fxGroup);
-    this.shipGeo = shipGeometry();
     this.glowTex = glowTexture();
     this.boomTex = glowTexture('rgba(255,255,220,1)', 'rgba(255,120,30,0.6)');
     this.hitGeo = new THREE.SphereGeometry(95, 8, 6);
@@ -200,29 +191,35 @@ export class View {
 
   _makeShip(s) {
     const g = new THREE.Group();
-    let body;
+    const model = buildShipModel(s);
+    const body = new THREE.Group();
+    body.add(model.group);
+    const engines = [];
+    for (const e of model.engines) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: model.engineColor, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.85 }));
+      sp.position.copy(e.pos);
+      sp.userData.base = e.size * 4;
+      sp.scale.setScalar(sp.userData.base);
+      body.add(sp);
+      engines.push(sp);
+      model.mats.push(sp.material);
+    }
     if (s.kind === 'citadel') {
-      body = new THREE.Mesh(new THREE.OctahedronGeometry(170, 0), new THREE.MeshStandardMaterial({ color: 0x7020c0, emissive: 0x6010ff, emissiveIntensity: 0.9, flatShading: true }));
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0xa040ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
       halo.scale.setScalar(900); g.add(halo);
-    } else {
-      body = new THREE.Mesh(this.shipGeo, new THREE.MeshStandardMaterial({ color: s.color, emissive: s.color, emissiveIntensity: 0.35, roughness: 0.5, metalness: 0.3, transparent: true }));
-      if (s.kind === 'dom') body.scale.set(1.2, 1.4, 1.2);
-      const eng = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: s.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8 }));
-      eng.position.x = -34; eng.scale.setScalar(60);
-      body.add(eng);
     }
     g.add(body);
     const hit = new THREE.Mesh(this.hitGeo, this.hitMat);
     hit.userData = { type: 'ship', id: s.id };
+    hit.scale.setScalar(Math.max(1, model.radius * 1.3 / 95));
     g.add(hit);
     const el = document.createElement('div');
     el.className = 'lbl ship ' + s.kind;
     el.innerHTML = '<span class="n"></span><div class="hp"><i></i></div>';
     el.style.color = '#' + new THREE.Color(s.color).getHexString();
-    const lo = new CSS2DObject(el); lo.position.set(0, 0, 70); lo.center.set(0.5, 0);
+    const lo = new CSS2DObject(el); lo.position.set(0, 0, Math.max(60, model.radius + 15)); lo.center.set(0.5, 0);
     g.add(lo);
-    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, id: s.id };
+    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, id: s.id, mats: model.mats, engines, hull: s.eq.hull, radius: model.radius };
     this.shipGroup.add(g);
     this.ships.set(s.id, g);
     return g;
@@ -335,7 +332,9 @@ export class View {
       }
       const info = s || (this._ghost && this._ghost[id]);
       if (!info) continue;
-      let g = this.ships.get(id) || this._makeShip(info);
+      let g = this.ships.get(id);
+      if (g && g.userData.hull !== info.eq.hull) { g.userData.el.remove(); this.shipGroup.remove(g); this.ships.delete(id); g = null; } // hull upgraded
+      g ||= this._makeShip(info);
       seen.add(id);
       g.visible = !!pos.v && pos.a > 0.01;
       g.userData.label.visible = g.visible;
@@ -347,9 +346,16 @@ export class View {
       }
       const body = g.userData.body;
       body.rotation.y = info.kind === 'citadel' ? t * 0.8 : g.userData.heading;
-      body.scale.setScalar(sc * (info.kind === 'dom' ? 1.3 : 1));
-      body.material.opacity = pos.a;
-      body.material.transparent = pos.a < 1;
+      body.scale.setScalar(sc);
+      for (const m of g.userData.mats) {
+        if (m.isSpriteMaterial) continue;
+        m.opacity = pos.a;
+        if (m.transparent !== pos.a < 1) { m.transparent = pos.a < 1; m.needsUpdate = true; }
+      }
+      for (const e of g.userData.engines) {
+        e.material.opacity = 0.85 * pos.a;
+        e.scale.setScalar(e.userData.base * (0.85 + Math.random() * 0.3));
+      }
       const S = stats(info);
       const hp = s ? s.hull : 0;
       const el = g.userData.el;
