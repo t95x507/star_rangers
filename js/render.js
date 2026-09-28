@@ -9,6 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as D from './data.js';
 import { SUB, planetPos, stats } from './sim.js';
 import { buildShipModel } from './models.js';
+import * as Audio from './audio.js';
 
 export const ANIM_MS = 1700;
 
@@ -390,6 +391,7 @@ export class View {
         const tt = fx.sh.k / SUB;
         const on = f >= tt - 0.02 && f <= tt + 0.07;
         fx.obj.visible = on; fx.spark.visible = on;
+        if (on && !fx.played) { fx.played = true; const a = this.ships.get(fx.sh.a); if (a) Audio.weapon(fx.sh.w, this._hearing(a.position)); }
         if (on) {
           const a = this.ships.get(fx.sh.a), b = this.ships.get(fx.sh.b);
           if (a && b) {
@@ -401,6 +403,7 @@ export class View {
       } else if (fx.kind === 'boom') {
         const el = (now - this.animStart) / ANIM_MS - fx.b.k / SUB;
         fx.obj.visible = el >= 0 && el < 0.6;
+        if (el >= 0 && !fx.played) { fx.played = true; Audio.explosion(fx.b.big, this._hearing(fx.obj.position)); }
         if (fx.obj.visible) {
           const q = el / 0.6;
           fx.obj.scale.setScalar((150 + q * 550) * fx.b.big * sc);
@@ -453,6 +456,13 @@ export class View {
     if (o.type === 'land') { const p = st.systems[s.sys]?.planets.find(p => p.id === o.planet); return p ? planetPos(p, t) : null; }
     if (o.type === 'loot') { const l = st.loot.find(l => l.id === o.id); return l ? [l.x, l.y] : null; }
     return null;
+  }
+
+  // how loud something at world position p is: fades with distance from the camera's focus point
+  _hearing(p) {
+    const d = p.distanceTo(this.controls.target);
+    const zoom = this.camera.position.distanceTo(this.controls.target);
+    return Math.max(0, 1 - d / (2500 + zoom * 0.6)) * Math.min(1, 3500 / zoom);
   }
 
   focus(v) {

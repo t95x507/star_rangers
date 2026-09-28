@@ -1,5 +1,6 @@
 // DOM user interface: HUD, planet screens, selection, log, galaxy map.
 import * as D from './data.js';
+import * as Audio from './audio.js';
 import { stats, cargoUsed, sysDist, jumpCost, jumpDays, findPlanet, sellPrice, hostileTo, dist, planetPos } from './sim.js';
 
 const $ = id => document.getElementById(id);
@@ -233,9 +234,13 @@ export function bindPlanet(G) {
   $('planet').addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.tab) { G.planetTab = b.dataset.tab; planet(G); return; }
+    if (b.dataset.tab) { Audio.ui('click'); G.planetTab = b.dataset.tab; planet(G); return; }
     if (b.dataset.hide) { G.planetHidden = G.st.ships[G.me].landed; planet(G); return; }
-    if (b.dataset.act) G.send({ t: 'act', a: JSON.parse(b.dataset.act) });
+    if (b.dataset.act) {
+      const act = JSON.parse(b.dataset.act);
+      Audio.ui({ buy: 'coin', sell: 'coin', buyW: 'buyEq', sellW: 'coin', repair: 'click', refuel: 'click' }[act.type] || 'click');
+      G.send({ t: 'act', a: act });
+    }
   });
 }
 

@@ -2,6 +2,7 @@ import { Net, randomCode } from './net.js';
 import * as Sim from './sim.js';
 import { View, ANIM_MS } from './render.js';
 import * as UI from './ui.js';
+import * as Audio from './audio.js';
 
 const $ = id => document.getElementById(id);
 const SAVE_KEY = 'star-rangers-p2p-save';
@@ -24,6 +25,10 @@ if (localStorage.getItem(SAVE_KEY)) $('l-continue').hidden = false;
 const lobbyStatus = t => { $('l-status').textContent = t; };
 const myName = () => { const n = $('l-name').value.trim() || 'Пилот'; localStorage.setItem('sr-name', n); return n; };
 const myColor = () => { localStorage.setItem('sr-color', $('l-color').value); return parseInt($('l-color').value.slice(1), 16); };
+
+// audio may only start after a user gesture
+addEventListener('pointerdown', () => Audio.initAudio(), { once: true });
+addEventListener('keydown', () => Audio.initAudio(), { once: true });
 
 $('l-host').onclick = () => startHost(Sim.newGame());
 $('l-continue').onclick = () => {
@@ -271,7 +276,8 @@ async function reconnect(code) {
 // ---------------------------------------------------------------- shared
 
 function applyState(m) {
-  const prevLanded = G.st && G.st.ships[G.me] && G.st.ships[G.me].landed;
+  const prev = G.st && G.st.ships[G.me];
+  const prevLanded = prev && prev.landed, prevJump = prev && !!prev.jump;
   G.st = m.st;
   G.rd = m.rd || {};
   G.timerEnd = m.timer ? performance.now() + m.timer : 0;
@@ -282,7 +288,36 @@ function applyState(m) {
   if (!G.view) return;
   const me = G.st.ships[G.me];
   if (me && me.landed !== prevLanded) { G.planetHidden = null; if (me.landed) G.sel = null; }
+  if (me && prev) {
+    if (!prevLanded && me.landed) Audio.ui('land');
+    else if (prevLanded && !me.landed && !me.jump) Audio.ui('takeoff');
+    if (!prevJump && me.jump) Audio.ui('jump');
+    else if (prevJump && !me.jump) Audio.ui('arrive');
+  }
+  logSounds();
   refreshUI();
+}
+
+// play a cue for fresh log lines addressed to us (or important global news)
+const LOG_SOUNDS = [
+  [/ПОБЕДА|освобождена/, 'victory'], [/захвачена|Галактика пала/, 'bad'], [/⚠/, 'alert'],
+  [/Подобрано/, 'pickup'], [/Награда/, 'coin'], [/Установлено/, 'buyEq'],
+  [/Недостаточно|Нет денег|не поместится|Нет свободных|Сначала продайте|отказала|невозможна|Не хватает|Слишком далеко/, 'error'],
+];
+function logSounds() {
+  const log = G.st.log;
+  const key = e => e.day + '|' + e.text + '|' + e.to;
+  let i = log.length;
+  if (G._lastLog) { while (i > 0 && key(log[i - 1]) !== G._lastLog) i--; if (i === 0) i = log.length; }
+  else i = log.length;
+  const fresh = log.slice(i);
+  if (log.length) G._lastLog = key(log[log.length - 1]);
+  let played = 0;
+  for (const e of fresh) {
+    if (played > 1 || (e.to && e.to !== G.me)) continue;
+    if (e.chat) { Audio.ui('click'); played++; continue; }
+    for (const [re, snd] of LOG_SOUNDS) if (re.test(e.text)) { Audio.ui(snd); played++; break; }
+  }
 }
 
 function refreshUI() {
@@ -292,6 +327,7 @@ function refreshUI() {
 
 G.order = o => {
   G.send({ t: 'order', o });
+  Audio.ui('order');
   const me = G.st.ships[G.me];
   if (me) {
     if (!G.isHost) me.order = o; // optimistic, the host will confirm
@@ -313,6 +349,12 @@ function enterGame() {
 
   UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G);
   $('endturn').onclick = toggleReady;
+  const vs = Audio.getSettings();
+  for (const kind of ['music', 'sfx']) {
+    const el = $('vol-' + kind);
+    el.value = vs[kind];
+    el.oninput = () => { Audio.initAudio(); Audio.setVolume(kind, +el.value); if (kind === 'sfx') Audio.ui('click'); };
+  }
   $('timer').onchange = e => { G.turnTimer = +e.target.value; G.nextTurnAt = performance.now() + G.turnTimer * 1000; dirty(); };
   $('chat').addEventListener('keydown', e => {
     if (e.key === 'Enter') { const t = e.target.value.trim(); if (t) G.send({ t: 'chat', text: t }); e.target.value = ''; e.target.blur(); }
@@ -383,6 +425,9 @@ function loop(now) {
   }
   if (now - lastUi > 250 || wasAnimating !== animating) {
     lastUi = now;
+    const me = G.st.ships[G.me];
+    Audio.setTension(!!(me && !me.jump && !me.landed && Object.values(G.st.ships).some(c =>
+      c.sys === me.sys && c !== me && !c.landed && !c.jump && (Sim.hostileTo(c, me) || Sim.hostileTo(me, c)) && Math.hypot(c.x - me.x, c.y - me.y) < 2200)));
     if (wasAnimating && !animating) refreshUI();
     wasAnimating = animating;
   }
