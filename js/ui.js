@@ -53,7 +53,7 @@ export function turnInfo(G, animating) {
   const left = G.timerEnd ? Math.max(0, G.timerEnd - performance.now()) : 0;
   let num, cap, frac;
   if (animating) { num = '▶'; cap = 'день ' + G.st.day; frac = 1; }
-  else if (G.paused) { num = '⏸'; cap = G.paused === 'landed' ? 'пауза — все на планетах' : 'пауза — никто не отдал приказ'; frac = 0; }
+  else if (G.paused) { num = '⏸'; cap = (G.paused === 'landed' ? 'пауза — все на планетах' : 'пауза — никто не отдал приказ') + ' · Пробел — пустить время'; frac = 0; }
   else if (G.fast) { num = '⏩'; cap = 'все включили ускорение'; frac = left / 1000; }
   else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём, пока все включат ускорение'; frac = 0; }
   else { num = Math.ceil(left / 1000); cap = 'до следующего дня'; frac = left / G.timerPeriod; }

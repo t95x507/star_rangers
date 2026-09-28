@@ -166,7 +166,16 @@ function pauseReason() {
 
 function hostTick() {
   const now = performance.now();
-  const paused = pauseReason();
+  // Entering the "nobody is doing anything" state resets everyone's skip flag and stops time.
+  // Anyone switching skip on while idle starts the clock again (all of them = fast-forward).
+  const idle = pauseReason();
+  if (idle && !G.wasIdle) {
+    for (const p in G.st.players) G.st.players[p].ready = false;
+    dirty();
+  }
+  G.wasIdle = !!idle;
+  const anySkip = Object.values(G.st.players).some(p => p.online && p.ready);
+  const paused = idle && !anySkip ? idle : '';
   if (paused !== (G.paused || '')) {
     G.paused = paused;
     if (!paused) G.nextTurnAt = Math.max(now + G.turnTimer * 1000, G.turnLock + 1000); // full turn after unpausing
