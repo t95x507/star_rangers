@@ -5,6 +5,7 @@ import * as UI from './ui.js';
 
 const $ = id => document.getElementById(id);
 const SAVE_KEY = 'star-rangers-p2p-save';
+const ROOM_KEY = 'star-rangers-p2p-room';
 
 const G = {
   st: null, me: null, isHost: false, rd: {}, sel: null, timerEnd: 0,
@@ -40,13 +41,19 @@ async function startHost(state) {
   setBusy(true);
   lobbyStatus('Создаём комнату…');
   const name = myName(), color = myColor();
+  // Reuse the previous room code so friends' links survive a page reload of the host.
   let code = null;
-  for (let i = 0; i < 4 && !code; i++) {
-    try { code = await G.net.host(randomCode()); }
+  const saved = localStorage.getItem(ROOM_KEY);
+  for (let i = 0; i < 8 && !code; i++) {
+    const want = saved && i < 5 ? saved : randomCode();
+    try { code = await G.net.host(want); }
     catch (e) {
       if (e.type !== 'unavailable-id') { lobbyStatus('Сеть недоступна (' + (e.type || e.message) + '). Играем без мультиплеера.'); break; }
+      // the old tab may still hold the id for a few seconds
+      if (want === saved) { lobbyStatus('Занимаем прежний код комнаты ' + saved + '…'); await new Promise(r => setTimeout(r, 2000)); }
     }
   }
+  if (code) localStorage.setItem(ROOM_KEY, code);
   G.isHost = true;
   G.code = code;
   G.st = state;
@@ -59,10 +66,17 @@ async function startHost(state) {
   G.fastAt = 0;
   document.body.classList.add('is-host');
 
+  G.seen = new Map();
   G.net.onMessage = (peer, m) => {
+    G.seen.set(peer, performance.now());
+    if (m.t === 'pong') return;
     if (m.t === 'hello') {
       const name = String(m.name || 'Пилот').slice(0, 16);
-      if (Object.values(G.st.players).some(p => p.online && p.name === name)) { G.net.sendTo(peer, { t: 'reject', why: 'Пилот с именем «' + name + '» уже в игре — выберите другое имя' }); return; }
+      if (G.st.players[G.me].name === name) { G.net.sendTo(peer, { t: 'reject', why: 'Имя «' + name + '» занято хостом — выберите другое' }); return; }
+      // Same name from a new connection = the player reloaded the page: hand the ship over.
+      for (const [oldPeer, oldPid] of G.peers) {
+        if (oldPeer !== peer && G.st.players[oldPid]?.name === name) { G.peers.delete(oldPeer); G.net.sendTo(oldPeer, { t: 'kicked' }); setTimeout(() => G.net.drop(oldPeer), 300); }
+      }
       const pid = Sim.addPlayer(G.st, name, m.color | 0);
       G.peers.set(peer, pid);
       G.net.sendTo(peer, { t: 'welcome', you: pid });
@@ -74,6 +88,7 @@ async function startHost(state) {
     if (pid) hostHandle(pid, m);
   };
   G.net.onLeave = peer => {
+    G.seen.delete(peer);
     const pid = G.peers.get(peer);
     if (!pid) return;
     G.peers.delete(peer);
@@ -85,6 +100,15 @@ async function startHost(state) {
   G.net.onStatus = t => UI.toast(t);
   G.send = m => hostHandle(G.me, m);
   setInterval(hostTick, 150);
+  // heartbeat: WebRTC notices dead peers very late, so drop anyone silent for 15 s
+  setInterval(() => {
+    G.net.broadcast({ t: 'ping' });
+    const now = performance.now();
+    for (const peer of [...G.net.conns.keys()]) {
+      if (!G.seen.has(peer)) G.seen.set(peer, now);
+      else if (now - G.seen.get(peer) > 15000) { G.net.drop(peer); G.net.onLeave(peer); }
+    }
+  }, 3000);
   enterGame();
   broadcast();
 }
@@ -161,27 +185,49 @@ async function startClient() {
   if (code.length !== 5) return lobbyStatus('Введите код комнаты из 5 символов');
   setBusy(true);
   lobbyStatus('Подключаемся к ' + code + '…');
-  const name = myName(), color = myColor();
-  G.net.onMessage = (_, m) => {
-    if (m.t === 'welcome') { G.me = m.you; }
-    else if (m.t === 'reject') { lobbyStatus(m.why); setBusy(false); }
-    else if (m.t === 'state') {
-      const first = !G.st;
-      applyState(m);
-      if (first && G.me) enterGame();
-    }
-  };
-  G.net.onLeave = () => { UI.toast('Связь с хостом потеряна'); $('turninfo').textContent = 'Хост отключился. Обновите страницу.'; };
-  G.net.onStatus = t => UI.toast(t);
+  G.name = myName(); G.color = myColor();
   try {
-    await G.net.join(code);
-    G.code = code;
-    G.send = m => G.net.send(m);
-    G.net.send({ t: 'hello', name, color });
+    await joinRoom(code);
   } catch (e) {
     lobbyStatus(e.message || String(e));
     setBusy(false);
   }
+}
+
+async function joinRoom(code) {
+  const net = G.net;
+  net.onMessage = (_, m) => {
+    if (m.t === 'ping') { net.send({ t: 'pong' }); return; }
+    if (m.t === 'welcome') { G.me = m.you; }
+    else if (m.t === 'reject') { lobbyStatus(m.why); setBusy(false); G.rejected = true; }
+    else if (m.t === 'kicked') { G.rejected = true; UI.toast('Вы зашли в игру с другой вкладки или устройства'); $('turninfo').textContent = 'Сессия открыта в другом месте.'; }
+    else if (m.t === 'state') {
+      const first = !G.view;
+      applyState(m);
+      if (first && G.me) enterGame();
+    }
+  };
+  net.onLeave = () => { if (G.net === net && !G.rejected) reconnect(code); };
+  net.onStatus = t => UI.toast(t);
+  await net.join(code);
+  G.code = code;
+  G.send = m => G.net.send(m);
+  net.send({ t: 'hello', name: G.name, color: G.color });
+}
+
+// Lost the host: keep retrying with the same name, the host hands our ship back.
+async function reconnect(code) {
+  if (G.reconnecting) return;
+  G.reconnecting = true;
+  for (let i = 1; ; i++) {
+    UI.toast('Связь с хостом потеряна, переподключение… (' + i + ')');
+    $('turninfo').textContent = 'Нет связи с хостом, переподключаемся…';
+    try { G.net.peer && G.net.peer.destroy(); } catch (e) { /* already gone */ }
+    G.net = new Net();
+    try { await joinRoom(code); UI.toast('Связь восстановлена'); $('turninfo').textContent = ''; break; }
+    catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+  }
+  G.reconnecting = false;
 }
 
 // ---------------------------------------------------------------- shared

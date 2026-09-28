@@ -69,7 +69,7 @@ export class Net {
       let done = false;
       const timer = setTimeout(() => { if (!done) reject(new Error('Хост не отвечает. Проверьте код комнаты.')); }, 15000);
       peer.on('error', e => {
-        if (!done) { clearTimeout(timer); reject(new Error(e.type === 'peer-unavailable' ? 'Комната не найдена' : 'Ошибка сети: ' + e.type)); }
+        if (!done) { clearTimeout(timer); reject(new Error(e.type === 'peer-unavailable' ? 'Комната не найдена: хост не в сети или код комнаты сменился' : 'Ошибка сети: ' + e.type)); }
         else this.onStatus('Ошибка сети: ' + e.type);
       });
       peer.on('open', () => {
@@ -81,6 +81,7 @@ export class Net {
     });
   }
 
+  drop(peerId) { const c = this.conns.get(peerId); this.conns.delete(peerId); try { c && c.close(); } catch (e) { /* ignore */ } }
   send(msg) { sendRaw(this.hostConn, JSON.stringify(msg)); }
   sendTo(peerId, msg) { sendRaw(this.conns.get(peerId), JSON.stringify(msg)); }
   broadcast(msg) { const text = JSON.stringify(msg); for (const c of this.conns.values()) sendRaw(c, text); }
