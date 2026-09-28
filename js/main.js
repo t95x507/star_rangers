@@ -99,7 +99,7 @@ async function startHost(state) {
   };
   G.net.onStatus = t => UI.toast(t);
   G.send = m => hostHandle(G.me, m);
-  setInterval(hostTick, 150);
+  setInterval(hostTick, 40);
   // heartbeat: WebRTC notices dead peers very late, so drop anyone silent for 15 s
   setInterval(() => {
     G.net.broadcast({ t: 'ping' });
@@ -136,27 +136,38 @@ function readiness() {
 }
 
 // World time is authoritative: a turn fires every G.turnTimer seconds no matter what.
-// If every online player switched "skip" on, the next turn fires 1 s after the previous animation.
+// If every online player switched "skip" on, days play back-to-back with no pause.
 // If every online player sits on a planet (and isn't taking off), time stops completely.
-const FAST_PAUSE = 1000;
+// In fast mode the next day is computed a bit before the current animation ends,
+// so it reaches every player in time and days play back-to-back without a pause.
+const FAST_LEAD = 300;
 
 function allDone(rd) {
   const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
   return online.length > 0 && online.every(p => rd[p]);
 }
 
-function allLanded() {
+// Time stops while nobody has anything to do: every online player is either
+// sitting on a planet or floating in space without an order.
+// Returns '' (time runs), 'landed' (all on planets) or 'idle' (all stand still).
+function pauseReason() {
   const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
-  return online.length > 0 && online.every(p => {
+  if (!online.length) return '';
+  let allLanded = true;
+  for (const p of online) {
     const s = G.st.ships[p];
-    return s && s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed));
-  });
+    if (!s || s.jump) return '';
+    const landed = s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed));
+    if (!landed && s.order) return '';
+    if (!landed) allLanded = false;
+  }
+  return allLanded ? 'landed' : 'idle';
 }
 
 function hostTick() {
   const now = performance.now();
-  const paused = allLanded();
-  if (paused !== !!G.paused) {
+  const paused = pauseReason();
+  if (paused !== (G.paused || '')) {
     G.paused = paused;
     if (!paused) G.nextTurnAt = Math.max(now + G.turnTimer * 1000, G.turnLock + 1000); // full turn after unpausing
     dirty();
@@ -174,9 +185,12 @@ function hostTick() {
 function doTurn() {
   const anim = Sim.resolveTurn(G.st);
   const now = performance.now();
-  G.turnLock = now + ANIM_MS;
-  G.fastAt = now + ANIM_MS + FAST_PAUSE;
-  G.nextTurnAt = now + Math.max(G.turnTimer * 1000, ANIM_MS + FAST_PAUSE);
+  // playback of this day starts when the previous one ends (chained) or right now
+  const start = G.playEnd && G.playEnd > now ? G.playEnd : now;
+  G.playEnd = start + ANIM_MS;
+  G.turnLock = G.playEnd - FAST_LEAD;
+  G.fastAt = G.playEnd - FAST_LEAD;
+  G.nextTurnAt = start + Math.max(G.turnTimer * 1000, ANIM_MS);
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(G.st)); } catch (e) { /* storage full or blocked */ }
   broadcast(anim);
 }
@@ -188,7 +202,7 @@ function broadcast(anim = null) {
   const now = performance.now(), rd = readiness();
   const fast = allDone(rd);
   const timer = G.turnTimer > 0 ? Math.max(0, (fast ? Math.max(G.fastAt, G.turnLock) : G.nextTurnAt) - now) : 0;
-  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast, paused: !!G.paused };
+  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast, paused: G.paused || '' };
   if (G.net.conns.size) G.net.broadcast(msg);
   applyState(msg);
 }
@@ -254,7 +268,7 @@ function applyState(m) {
   G.timerEnd = m.timer ? performance.now() + m.timer : 0;
   G.timerPeriod = m.period || 0;
   G.fast = !!m.fast;
-  G.paused = !!m.paused;
+  G.paused = m.paused || '';
   if (m.anim && G.view) G.view.startAnim(m.anim);
   if (!G.view) return;
   const me = G.st.ships[G.me];

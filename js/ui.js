@@ -53,15 +53,30 @@ export function turnInfo(G, animating) {
   const left = G.timerEnd ? Math.max(0, G.timerEnd - performance.now()) : 0;
   let num, cap, frac;
   if (animating) { num = '▶'; cap = 'день ' + G.st.day; frac = 1; }
-  else if (G.paused) { num = '⏸'; cap = 'пауза — все на планетах'; frac = 0; }
+  else if (G.paused) { num = '⏸'; cap = G.paused === 'landed' ? 'пауза — все на планетах' : 'пауза — никто не отдал приказ'; frac = 0; }
   else if (G.fast) { num = '⏩'; cap = 'все включили ускорение'; frac = left / 1000; }
   else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём, пока все включат ускорение'; frac = 0; }
   else { num = Math.ceil(left / 1000); cap = 'до следующего дня'; frac = left / G.timerPeriod; }
   const key = num + '|' + cap;
   if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = num; box.querySelector('.cap').textContent = cap; }
   box.querySelector('.bar i').style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
+  const clock = gameClock(animating && G.view.anim ? G.view.anim.day + G.view.animFrac() : G.st.day);
+  if (box.dataset.c !== clock) { box.dataset.c = clock; box.querySelector('.date').textContent = clock; }
+  box.classList.toggle('paused', !!G.paused && !animating);
   box.classList.toggle('urgent', !animating && !G.fast && !G.paused && G.timerPeriod > 0 && left < 3000);
   box.classList.toggle('fast', !!G.fast);
+}
+
+// In-game calendar: day 0 = 1 January 3301, hours tick along while a day is animated.
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const MDAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+export function gameClock(t) {
+  let d = Math.floor(t), year = 3301 + Math.floor(d / 365), m = 0;
+  d %= 365;
+  while (d >= MDAYS[m]) d -= MDAYS[m++];
+  const mins = Math.floor((t - Math.floor(t)) * 24 * 60 / 10) * 10;
+  const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
+  return `${d + 1} ${MONTHS[m]} ${year} · ${hh}:${mm} · день ${Math.floor(t)}`;
 }
 
 export function log(G) {

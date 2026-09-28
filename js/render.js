@@ -238,11 +238,23 @@ export class View {
     return m;
   }
 
+  // A turn that arrives while the previous one is still playing waits in a queue,
+  // so fast-forwarded days chain seamlessly instead of cutting each other off.
   startAnim(anim) {
+    const now = performance.now();
+    if (anim && this.anim && now - this.animStart < ANIM_MS) {
+      (this.queue ||= []).push(anim);
+      if (this.queue.length > 2) this.queue.splice(0, this.queue.length - 2); // badly behind (hidden tab): skip ahead
+      return;
+    }
+    this._beginAnim(anim, now);
+  }
+
+  _beginAnim(anim, start) {
     for (const f of this.fx) this.fxGroup.remove(f.obj);
     this.fx = [];
     this.anim = anim;
-    this.animStart = performance.now();
+    this.animStart = start;
     if (!anim) return;
     for (const sh of anim.shots) {
       if (sh.sys !== this.sysId) continue;
@@ -264,6 +276,8 @@ export class View {
       this.fx.push({ obj: sp, kind: 'boom', b });
     }
   }
+
+  animFrac() { return this.anim ? Math.min(1, (performance.now() - this.animStart) / ANIM_MS) : 1; }
 
   // Interpolated position of a ship during a turn animation.
   _animPos(id, f) {
@@ -288,6 +302,11 @@ export class View {
     if (this.sysId !== viewSys || this.sysOwner !== sys.owner) this.buildSystem(sys);
 
     const now = performance.now();
+    if (this.queue && this.queue.length && (!this.anim || now - this.animStart >= ANIM_MS)) {
+      // continue exactly where the previous day ended, unless we fell far behind
+      const end = this.anim ? this.animStart + ANIM_MS : now;
+      this._beginAnim(this.queue.shift(), now - end < ANIM_MS / 2 ? end : now);
+    }
     const f = this.anim ? Math.min(1, (now - this.animStart) / ANIM_MS) : 1;
     const animating = this.anim && f < 1;
     const t = animating ? this.anim.day + f : st.day;
@@ -391,7 +410,7 @@ export class View {
       this.rangeRing.visible = range > 0;
       this.rangeRing.position.copy(mg.position);
       this.rangeRing.scale.setScalar(range);
-      const tp = !animating && this.orderPoint(st, me, t);
+      const tp = this.orderPoint(st, me, t);
       this.orderLine.visible = !!tp;
       if (tp) {
         this.orderLine.geometry.setFromPoints([mg.position.clone().setY(2), new THREE.Vector3(tp[0], 2, tp[1])]);
