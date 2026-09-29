@@ -10,6 +10,7 @@ import * as D from './data.js';
 import { SUB, planetPos, stats } from './sim.js';
 import { buildShipModel } from './models.js';
 import * as Audio from './audio.js';
+import { buildNebulae } from './nebula.js';
 
 export const ANIM_MS = 1700;
 
@@ -110,25 +111,25 @@ export class View {
   }
 
   _background() {
-    const n = 4000, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const v = new THREE.Vector3().randomDirection().multiplyScalar(30000 + Math.random() * 10000);
-      pos.set([v.x, v.y, v.z], i * 3);
-      const c = new THREE.Color().setHSL(0.55 + Math.random() * 0.2, 0.4, 0.5 + Math.random() * 0.5);
-      col.set([c.r, c.g, c.b], i * 3);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true })));
-    for (let i = 0; i < 6; i++) {
-      const hue = Math.random();
-      const tex = glowTexture(`hsla(${hue * 360},70%,40%,0.5)`, `hsla(${hue * 360},60%,25%,0.18)`);
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.5 }));
-      sp.position.set((Math.random() - 0.5) * 30000, -6000 - Math.random() * 4000, (Math.random() - 0.5) * 30000);
-      sp.scale.setScalar(12000 + Math.random() * 12000);
-      this.scene.add(sp);
-    }
+    // two star layers: many faint pinpoints and fewer bright coloured stars
+    const layer = (n, size, bright) => {
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const v = new THREE.Vector3().randomDirection().multiplyScalar(30000 + Math.random() * 10000);
+        pos.set([v.x, v.y, v.z], i * 3);
+        const c = new THREE.Color().setHSL(Math.random() < 0.3 ? 0.08 + Math.random() * 0.06 : 0.55 + Math.random() * 0.12, bright ? 0.6 : 0.35, bright ? 0.75 : 0.45 + Math.random() * 0.45);
+        col.set([c.r, c.g, c.b], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, map: bright ? this.starDot : null, transparent: bright, depthWrite: false, blending: bright ? THREE.AdditiveBlending : THREE.NormalBlending })));
+    };
+    this.starDot = glowTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0.25)');
+    layer(5000, 1.4, false);
+    layer(350, 7, true);
+    this.nebulaGroup = new THREE.Group();
+    this.scene.add(this.nebulaGroup);
   }
 
   resize() {
@@ -152,6 +153,8 @@ export class View {
     this._clearGroup(this.shipGroup);
     this.ships.clear(); this.loot.clear(); this.planets.clear();
     this.sysId = sys.id; this.sysOwner = sys.owner;
+    this._clearGroup(this.nebulaGroup);
+    this.nebulaGroup.add(buildNebulae(sys.id, sys.owner === 'dom'));
     const g = this.sysGroup;
     const starCol = new THREE.Color(sys.star.color);
     const star = new THREE.Mesh(new THREE.SphereGeometry(sys.star.size, 48, 24), new THREE.MeshBasicMaterial({ color: starCol.clone().multiplyScalar(2.2) }));

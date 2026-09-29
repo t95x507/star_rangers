@@ -116,100 +116,176 @@ const UI_SFX = {
 export function ui(name, vol = 1) { const v = voice(vol); if (v && UI_SFX[name]) UI_SFX[name](v.out, v.t); }
 
 // ---------------------------------------------------------------- generative music
+// Several ambient themes rotate every couple of minutes; a separate battle track
+// crossfades in while enemies are close and the ambience ducks underneath it.
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
-// A minor-ish progression, each chord lasts one bar
-const CHORDS = [
-  [45, 57, 60, 64, 67, 71], // Am9
-  [41, 53, 57, 60, 64],     // Fmaj7
-  [48, 55, 59, 62, 64],     // Cmaj9
-  [43, 55, 59, 62, 66],     // G(maj7)
-  [50, 53, 57, 60, 64],     // Dm9
-  [41, 53, 57, 60, 67],     // Fadd9
-  [40, 52, 55, 59, 62],     // Em7
-  [45, 57, 60, 64, 71],     // Am(add9)
+
+const THEMES = [
+  { name: 'Туманность', bar: 8, wave: 'sawtooth', cutoff: [500, 1300], padVol: 0.06, bellP: 0.28, bellRatio: 3.5, arp: null,
+    chords: [[45, 57, 60, 64, 67, 71], [41, 53, 57, 60, 64], [48, 55, 59, 62, 64], [43, 55, 59, 62, 66], [50, 53, 57, 60, 64], [41, 53, 57, 60, 67], [40, 52, 55, 59, 62], [45, 57, 60, 64, 71]] },
+  { name: 'Глубокий космос', bar: 11, wave: 'triangle', cutoff: [300, 800], padVol: 0.09, bellP: 0.12, bellRatio: 1.41, arp: null, drone: true,
+    chords: [[38, 50, 57, 60, 65], [36, 48, 55, 60, 64], [34, 46, 53, 58, 62], [36, 48, 55, 58, 64]] },
+  { name: 'Торговый путь', bar: 6, wave: 'sawtooth', cutoff: [700, 1800], padVol: 0.045, bellP: 0.1, bellRatio: 2, arp: [0, 2, 1, 3, 2, 4, 3, 1],
+    chords: [[50, 62, 66, 69, 73], [52, 62, 66, 71, 76], [47, 59, 62, 66, 71], [55, 62, 67, 71, 74], [50, 62, 66, 69, 76], [45, 61, 64, 69, 73]] },
+  { name: 'Чужие звёзды', bar: 9, wave: 'square', cutoff: [350, 900], padVol: 0.035, bellP: 0.35, bellRatio: 2.76, arp: null, glide: true,
+    chords: [[40, 52, 53, 59, 64], [41, 53, 56, 60, 65], [40, 52, 55, 58, 63], [38, 50, 53, 56, 62]] },
 ];
-const BAR = 8;
-let tension = 0, tensionGain, nextBar = 0, bar = 0, nextStep = 0;
+const THEME_BARS = 14;
+
+// battle: 132 bpm, A minor, four-on-the-floor with driving bass
+const BPM = 132, STEP = 60 / BPM / 4; // 16th note
+const BATTLE_PROG = [[45, 57, 60, 64], [41, 53, 57, 60], [43, 55, 59, 62], [40, 52, 55, 59], [45, 57, 60, 64], [48, 55, 60, 64], [43, 55, 59, 62], [44, 56, 59, 64]];
+const BASS_PAT = [1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1];
+const LEAD_PAT = [0, -1, 2, -1, 1, -1, 3, 2, 0, -1, 2, -1, 3, -1, 1, -1];
+
+let tension = 0, ambGain, battleGain, reverbSend;
+let theme = 0, themeBar = 0, nextBar = 0, nextArp = 0, nextStep = 0, bStep = 0;
 const barTimes = [];
 
 export function setTension(v) {
+  if (!ctx || !!v === !!tension) { tension = v; return; }
   tension = v;
-  if (tensionGain) tensionGain.gain.setTargetAtTime(v ? 0.9 : 0.0001, ctx.currentTime, v ? 1.2 : 3);
+  const t = ctx.currentTime;
+  ambGain.gain.setTargetAtTime(v ? 0.25 : 1, t, v ? 0.6 : 2.5);
+  battleGain.gain.setTargetAtTime(v ? 1 : 0.0001, t, v ? 0.5 : 2.5);
+  if (v) { nextStep = Math.max(nextStep, t + 0.05); }
 }
+export const currentTheme = () => THEMES[theme].name;
 
-function pad(notes, t) {
+function pad(th, notes, t) {
+  const len = th.bar;
   const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 0.8;
-  f.frequency.setValueAtTime(500, t); f.frequency.linearRampToValueAtTime(1300, t + BAR * 0.5); f.frequency.linearRampToValueAtTime(600, t + BAR + 2);
+  f.frequency.setValueAtTime(th.cutoff[0], t); f.frequency.linearRampToValueAtTime(th.cutoff[1], t + len * 0.5); f.frequency.linearRampToValueAtTime(th.cutoff[0], t + len + 2);
   const g = ctx.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.linearRampToValueAtTime(0.06, t + 2.5);
-  g.gain.setValueAtTime(0.06, t + BAR - 0.5);
-  g.gain.linearRampToValueAtTime(0.0001, t + BAR + 3);
-  f.connect(g); g.connect(musicBus); g.connect(reverbIn);
-  for (const n of notes.slice(1)) for (const det of [-7, 7]) {
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
+  g.gain.linearRampToValueAtTime(th.padVol, t + Math.min(3, len * 0.35));
+  g.gain.setValueAtTime(th.padVol, t + len - 0.5);
+  g.gain.linearRampToValueAtTime(0.0001, t + len + 3);
+  f.connect(g); g.connect(ambGain); g.connect(reverbSend);
+  for (const n of notes.slice(1)) for (const det of [-8, 8]) {
+    const o = ctx.createOscillator(); o.type = th.wave;
     o.frequency.value = mtof(n); o.detune.value = det;
-    o.connect(f); o.start(t); o.stop(t + BAR + 3.2);
+    if (th.glide) { o.detune.setValueAtTime(det - 40, t); o.detune.linearRampToValueAtTime(det, t + 2.5); }
+    o.connect(f); o.start(t); o.stop(t + len + 3.2);
   }
-  // soft sub bass on the root
   const b = ctx.createOscillator(), bg = ctx.createGain();
-  b.type = 'triangle'; b.frequency.value = mtof(notes[0] - 12);
-  bg.gain.setValueAtTime(0.0001, t); bg.gain.linearRampToValueAtTime(0.12, t + 1.5); bg.gain.linearRampToValueAtTime(0.0001, t + BAR + 1);
-  b.connect(bg); bg.connect(musicBus); b.start(t); b.stop(t + BAR + 1.2);
+  b.type = th.drone ? 'sine' : 'triangle'; b.frequency.value = mtof(notes[0] - 12);
+  bg.gain.setValueAtTime(0.0001, t); bg.gain.linearRampToValueAtTime(th.drone ? 0.2 : 0.12, t + 1.5); bg.gain.linearRampToValueAtTime(0.0001, t + len + 1);
+  b.connect(bg); bg.connect(ambGain); b.start(t); b.stop(t + len + 1.2);
+  if (th.drone) { // slowly beating fifth above the drone
+    const d = ctx.createOscillator(), dg = ctx.createGain();
+    d.type = 'sine'; d.frequency.value = mtof(notes[0] - 5) * 1.003;
+    dg.gain.setValueAtTime(0.0001, t); dg.gain.linearRampToValueAtTime(0.05, t + 3); dg.gain.linearRampToValueAtTime(0.0001, t + len + 2);
+    d.connect(dg); dg.connect(ambGain); dg.connect(reverbSend); d.start(t); d.stop(t + len + 2.2);
+  }
 }
 
-function bell(freq, t, vol) { // two-operator FM bell into the reverb
+function bell(freq, t, vol, ratio, out = ambGain) { // two-operator FM bell
   const car = ctx.createOscillator(), mod = ctx.createOscillator(), mg = ctx.createGain(), g = ctx.createGain();
-  car.frequency.value = freq; mod.frequency.value = freq * 3.5;
+  car.frequency.value = freq; mod.frequency.value = freq * ratio;
   mg.gain.setValueAtTime(freq * 2, t); mg.gain.exponentialRampToValueAtTime(freq * 0.1, t + 1.5);
   mod.connect(mg); mg.connect(car.frequency);
   env(g, t, 0.005, vol, 2.5);
-  car.connect(g); g.connect(musicBus); g.connect(reverbIn);
+  car.connect(g); g.connect(out); g.connect(reverbSend);
   car.start(t); mod.start(t); car.stop(t + 2.6); mod.stop(t + 2.6);
 }
 
-function pulse(notes, t) { // tension layer: filtered bass eighths and a soft kick
-  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420; f.Q.value = 6;
-  f.connect(tensionGain);
-  for (let i = 0; i < 16; i++) {
-    const tt = t + i * BAR / 16;
-    const o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = 'sawtooth'; o.frequency.value = mtof(notes[0] - (i % 4 === 3 ? 5 : 12));
-    env(g, tt, 0.005, 0.12, 0.2);
-    o.connect(g); g.connect(f); o.start(tt); o.stop(tt + 0.3);
-    if (i % 4 === 0) {
-      const k = ctx.createOscillator(), kg = ctx.createGain();
-      k.frequency.setValueAtTime(110, tt); k.frequency.exponentialRampToValueAtTime(40, tt + 0.25);
-      env(kg, tt, 0.003, 0.35, 0.3);
-      k.connect(kg); kg.connect(tensionGain); k.start(tt); k.stop(tt + 0.4);
-    }
+function pluck(freq, t, vol) { // arpeggio pluck with a lowpass sweep
+  const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  o.type = 'sawtooth'; o.frequency.value = freq;
+  f.type = 'lowpass'; f.Q.value = 3; f.frequency.setValueAtTime(3000, t); f.frequency.exponentialRampToValueAtTime(400, t + 0.25);
+  env(g, t, 0.004, vol, 0.35);
+  o.connect(f); f.connect(g); g.connect(ambGain); g.connect(reverbSend);
+  o.start(t); o.stop(t + 0.45);
+}
+
+// ---- battle track pieces
+function kick(t) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.18);
+  env(g, t, 0.002, 0.55, 0.28);
+  o.connect(g); g.connect(battleGain); o.start(t); o.stop(t + 0.35);
+}
+function snare(t) {
+  noise(t, 0.18, 0.28, battleGain, 'highpass', 2500, 1200, 0.7);
+  osc('triangle', 220, 160, t, 0.1, 0.15, battleGain);
+}
+function hat(t, open) { noise(t, open ? 0.14 : 0.04, open ? 0.1 : 0.07, battleGain, 'highpass', 8000, 7000, 0.7); }
+function bassNote(m, t) {
+  const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  o.type = 'sawtooth'; o.frequency.value = mtof(m);
+  f.type = 'lowpass'; f.Q.value = 8; f.frequency.setValueAtTime(1400, t); f.frequency.exponentialRampToValueAtTime(220, t + STEP * 1.6);
+  env(g, t, 0.003, 0.2, STEP * 1.8);
+  o.connect(f); f.connect(g); g.connect(battleGain); o.start(t); o.stop(t + STEP * 2.2);
+}
+function stab(notes, t) {
+  const f = ctx.createBiquadFilter(), g = ctx.createGain();
+  f.type = 'lowpass'; f.frequency.setValueAtTime(2600, t); f.frequency.exponentialRampToValueAtTime(600, t + 0.3);
+  env(g, t, 0.004, 0.06, 0.3);
+  f.connect(g); g.connect(battleGain); g.connect(reverbSend);
+  for (const n of notes.slice(1)) for (const det of [-10, 10]) {
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = mtof(n + 12); o.detune.value = det;
+    o.connect(f); o.start(t); o.stop(t + 0.4);
   }
+}
+function lead(m, t) {
+  const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+  o.type = 'square'; o.frequency.value = mtof(m);
+  f.type = 'lowpass'; f.frequency.value = 2200;
+  env(g, t, 0.004, 0.045, STEP * 1.5);
+  o.connect(f); f.connect(g); g.connect(battleGain); g.connect(reverbSend);
+  o.start(t); o.stop(t + STEP * 2);
+}
+
+function battleStep(t, i) {
+  const s = i % 16, chord = BATTLE_PROG[Math.floor(i / 16) % BATTLE_PROG.length];
+  const phrase = Math.floor(i / 64) % 2; // every other 4-bar phrase the lead joins
+  if (s % 4 === 0) kick(t);
+  if (s === 4 || s === 12) snare(t);
+  if (s % 2 === 0) hat(t, s % 8 === 6);
+  if (BASS_PAT[s]) bassNote(chord[0] - (s === 15 ? -7 : 0), t);
+  if (s === 2 || s === 10 || (s === 7 && phrase)) stab(chord, t);
+  if (phrase && LEAD_PAT[s] >= 0) lead(chord[1 + LEAD_PAT[s] % (chord.length - 1)] + 12, t);
 }
 
 function startMusic() {
-  tensionGain = ctx.createGain(); tensionGain.gain.value = 0.0001; tensionGain.connect(musicBus);
-  nextBar = ctx.currentTime + 0.3; nextStep = nextBar;
+  ambGain = ctx.createGain(); ambGain.gain.value = 1; ambGain.connect(musicBus);
+  battleGain = ctx.createGain(); battleGain.gain.value = 0.0001; battleGain.connect(musicBus);
+  reverbSend = reverbIn;
+  theme = Math.floor(Math.random() * THEMES.length);
+  nextBar = ctx.currentTime + 0.3; nextArp = nextBar; nextStep = nextBar;
   setInterval(() => {
     if (ctx.state !== 'running') return;
-    const horizon = ctx.currentTime + 1.5;
+    const now = ctx.currentTime, horizon = now + 1.5;
     while (nextBar < horizon) {
-      const ch = CHORDS[bar % CHORDS.length];
-      barTimes.push([nextBar, ch]);
+      if (themeBar >= THEME_BARS) { themeBar = 0; theme = (theme + 1 + Math.floor(Math.random() * (THEMES.length - 1))) % THEMES.length; }
+      const th = THEMES[theme], ch = th.chords[themeBar % th.chords.length];
+      barTimes.push([nextBar, ch, th]);
       if (barTimes.length > 4) barTimes.shift();
-      pad(ch, nextBar);
-      pulse(ch, nextBar);
-      nextBar += BAR; bar++;
+      pad(th, ch, nextBar);
+      nextBar += th.bar; themeBar++;
     }
-    while (nextStep < horizon) {
-      let ch = CHORDS[0];
-      for (const [bt, c] of barTimes) if (bt <= nextStep) ch = c;
-      // sparse arpeggio; busier when there is danger around
-      if (Math.random() < (tension ? 0.45 : 0.28)) {
-        const n = ch[1 + Math.floor(Math.random() * (ch.length - 1))] + (Math.random() < 0.5 ? 12 : 24);
-        bell(mtof(n), nextStep + (Math.random() < 0.3 ? BAR / 16 : 0), 0.05 + Math.random() * 0.04);
+    while (nextArp < horizon) {
+      let ch = barTimes[0][1], th = barTimes[0][2];
+      for (const [bt, c, tt] of barTimes) if (bt <= nextArp) { ch = c; th = tt; }
+      const beat = th.bar / 8;
+      if (th.arp) { // steady arpeggio pattern (two notes per beat)
+        for (let k = 0; k < 2; k++) {
+          const idx = th.arp[(Math.round(nextArp / (beat / 2)) + k) % th.arp.length];
+          pluck(mtof(ch[1 + idx % (ch.length - 1)] + 12), nextArp + k * beat / 2, 0.035);
+        }
       }
-      nextStep += BAR / 8;
+      if (Math.random() < (tension ? th.bellP * 0.5 : th.bellP)) {
+        const n = ch[1 + Math.floor(Math.random() * (ch.length - 1))] + (Math.random() < 0.5 ? 12 : 24);
+        bell(mtof(n), nextArp + (Math.random() < 0.3 ? beat / 2 : 0), 0.05 + Math.random() * 0.04, th.bellRatio);
+      }
+      nextArp += beat;
     }
-  }, 250);
+    // battle track is only scheduled while it can be heard
+    if (tension || battleGain.gain.value > 0.01) {
+      if (nextStep < now) { nextStep = now + 0.05; bStep = Math.ceil(bStep / 16) * 16; } // restart on a bar line
+      while (nextStep < horizon) { battleStep(nextStep, bStep); nextStep += STEP; bStep++; }
+    }
+  }, 200);
 }
