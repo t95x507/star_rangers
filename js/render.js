@@ -75,11 +75,13 @@ export class View {
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
-    this.scene.add(new THREE.AmbientLight(0x8899bb, 0.35));
+    // the star is the key light; only a faint cold fill keeps shadow sides from going pitch black
+    this.scene.add(new THREE.HemisphereLight(0x6a86c0, 0x0a0c14, 0.12));
+    this.scene.add(new THREE.AmbientLight(0x8899bb, 0.02));
     // soft studio reflections so metal hulls catch highlights instead of looking like plastic
     const pmrem = new THREE.PMREMGenerator(r);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.35;
+    this.scene.environmentIntensity = 0.06;
     this._background();
     this.sysGroup = new THREE.Group(); this.scene.add(this.sysGroup);
     this.shipGroup = new THREE.Group(); this.scene.add(this.shipGroup);
@@ -172,7 +174,8 @@ export class View {
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: starCol, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     glow.scale.setScalar(sys.star.size * 5.5);
     g.add(glow);
-    const light = new THREE.PointLight(starCol, 3.2, 0, 0);
+    const light = new THREE.PointLight(starCol.clone().lerp(new THREE.Color(0xffffff), 0.35), 7, 0, 0);
+    light.position.y = 450; // a bit above the plane so the top of hulls (what the camera sees) catches the light
     g.add(light);
     if (sys.owner === 'dom') {
       const haze = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0x8020ff, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }));

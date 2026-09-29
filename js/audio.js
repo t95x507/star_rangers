@@ -117,7 +117,7 @@ export function ui(name, vol = 1) { const v = voice(vol); if (v && UI_SFX[name])
 
 // ---------------------------------------------------------------- generative music
 // Several ambient themes rotate every couple of minutes; a separate battle track
-// crossfades in while enemies are close and the ambience ducks underneath it.
+// crossfades in while enemies are close and replaces the ambience.
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 
@@ -152,7 +152,7 @@ const battleOn = () => mode === 'battle' || (mode === 'auto' && !!tension);
 function applyMix(fast) {
   if (!ctx) return;
   const t = ctx.currentTime, on = battleOn();
-  const amb = mode === 'battle' ? 0.0001 : on ? 0.25 : 1;
+  const amb = on ? 0.0001 : 1; // battle music replaces the ambience completely
   ambGain.gain.setTargetAtTime(amb, t, fast ? 0.3 : on ? 0.6 : 2.5);
   battleGain.gain.setTargetAtTime(on ? 1 : 0.0001, t, fast ? 0.3 : on ? 0.5 : 2.5);
   if (on) nextStep = Math.max(nextStep, t + 0.05);
