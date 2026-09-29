@@ -1,6 +1,6 @@
 // Thin P2P layer over PeerJS (WebRTC data channels, public signalling broker).
 // Star topology: the host is authoritative, clients talk only to the host.
-const PREFIX = 'star-rangers-p2p-v1-';
+const PREFIX = 'star-rangers-p2p-v2-'; // v2: real-time protocol (ticks), incompatible with v1
 const CHUNK = 4000; // PeerJS json channel limit is ~16KB of UTF-8 (Cyrillic = 2 bytes), so we slice messages ourselves
 let msgSeq = 0;
 

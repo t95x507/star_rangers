@@ -1,6 +1,6 @@
 import { Net, randomCode } from './net.js';
 import * as Sim from './sim.js';
-import { View, ANIM_MS } from './render.js';
+import { View, DAY_MS } from './render.js';
 import * as UI from './ui.js';
 import * as Audio from './audio.js';
 
@@ -9,7 +9,7 @@ const SAVE_KEY = 'star-rangers-p2p-save';
 const ROOM_KEY = 'star-rangers-p2p-room';
 
 const G = {
-  st: null, me: null, isHost: false, rd: {}, sel: null, timerEnd: 0,
+  st: null, me: null, isHost: false, sel: null, paused: false, speed: 1,
   net: new Net(), view: null, planetTab: 'market', planetHidden: null,
 };
 window.G = G; // handy for debugging from the console
@@ -62,13 +62,10 @@ async function startHost(state) {
   G.isHost = true;
   G.code = code;
   G.st = state;
-  for (const id in state.players) state.players[id].online = false;
+  for (const id in state.players) Object.assign(state.players[id], { online: false, pause: false });
   G.me = Sim.addPlayer(state, name, color);
   G.peers = new Map();
-  G.turnTimer = 10;
-  G.turnLock = 0;
-  G.nextTurnAt = performance.now() + G.turnTimer * 1000;
-  G.fastAt = 0;
+  G.acc = 0; G.lastStep = performance.now(); G.lastFull = 0; G.lastTick = 0; G.ev = null;
   document.body.classList.add('is-host');
 
   G.seen = new Map();
@@ -98,13 +95,13 @@ async function startHost(state) {
     if (!pid) return;
     G.peers.delete(peer);
     G.st.players[pid].online = false;
-    G.st.players[pid].ready = false;
+    G.st.players[pid].pause = false;
     hostLog(G.st.players[pid].name + ' отключился');
     dirty();
   };
   G.net.onStatus = t => UI.toast(t);
   G.send = m => hostHandle(G.me, m);
-  setInterval(hostTick, 40);
+  startClock(hostTick);
   // heartbeat: WebRTC notices dead peers very late, so drop anyone silent for 15 s
   setInterval(() => {
     G.net.broadcast({ t: 'ping' });
@@ -115,7 +112,16 @@ async function startHost(state) {
     }
   }, 3000);
   enterGame();
-  broadcast();
+  sendTick(); sendFull();
+}
+
+// Background tabs throttle timers to once a second; a worker's timer keeps the world
+// running at full speed even while the host's tab is hidden.
+function startClock(fn) {
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 20)'], { type: 'text/javascript' })));
+    w.onmessage = fn;
+  } catch (e) { setInterval(fn, 20); }
 }
 
 function hostLog(text) { G.st.log.push({ day: G.st.day, text, to: null }); }
@@ -126,7 +132,7 @@ function hostHandle(pid, m) {
   switch (m.t) {
     case 'order': Sim.setOrder(st, pid, m.o); break;
     case 'act': Sim.act(st, pid, m.a); break;
-    case 'ready': pl.ready = !!m.v; break;
+    case 'pause': pl.pause = !!m.v; break;
     case 'chat': st.log.push({ day: st.day, text: pl.name + ': ' + String(m.text).slice(0, 200), to: null, chat: 1 }); break;
   }
   dirty();
@@ -134,89 +140,68 @@ function hostHandle(pid, m) {
 
 function dirty() { G.dirty = true; }
 
-function readiness() {
-  const rd = {};
-  for (const pid in G.st.players) rd[pid] = Sim.readyReason(G.st, pid);
-  return rd;
-}
-
-// World time is authoritative: a turn fires every G.turnTimer seconds no matter what.
-// If every online player switched "skip" on, days play back-to-back with no pause.
-// If every online player sits on a planet (and isn't taking off), time stops completely.
-// In fast mode the next day is computed a bit before the current animation ends,
-// so it reaches every player in time and days play back-to-back without a pause.
-const FAST_LEAD = 300;
-
-function allDone(rd) {
-  const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
-  return online.length > 0 && online.every(p => rd[p]);
-}
-
-// Time stops while nobody has anything to do: every online player is either
-// sitting on a planet or floating in space without an order.
-// Returns '' (time runs), 'landed' (all on planets) or 'idle' (all stand still).
-function pauseReason() {
-  const online = Object.keys(G.st.players).filter(p => G.st.players[p].online);
-  if (!online.length) return '';
-  let allLanded = true;
-  for (const p of online) {
-    const s = G.st.ships[p];
-    if (!s || s.jump) return '';
-    const landed = s.landed && !(s.order && !(s.order.type === 'land' && s.order.planet === s.landed));
-    if (!landed && s.order) return '';
-    if (!landed) allLanded = false;
-  }
-  return allLanded ? 'landed' : 'idle';
-}
+// The world runs in real time: the host advances the simulation one substep (1/SUB of a day)
+// at a time and streams small "tick" messages (ship positions and events) to everyone.
+// The whole state goes out once a day and whenever something besides movement changed.
+// Time stops only while every online player has asked for a pause.
+const FULL_EVERY = 250; // ms, at most this often
+const TICK_EVERY = 90;  // ms
 
 function hostTick() {
-  const now = performance.now();
-  // Entering the "nobody is doing anything" state resets everyone's skip flag and stops time.
-  // Anyone switching skip on while idle starts the clock again (all of them = fast-forward).
-  const idle = pauseReason();
-  if (idle && !G.wasIdle) {
-    for (const p in G.st.players) G.st.players[p].ready = false;
-    dirty();
+  const st = G.st, now = performance.now();
+  const dt = now - G.lastStep;
+  G.lastStep = now;
+  const paused = Sim.allPaused(st);
+  if (paused !== G.paused) { G.paused = paused; dirty(); }
+  let stepped = false, newDay = false;
+  if (!paused) {
+    const subMs = DAY_MS / G.speed / Sim.SUB;
+    G.acc = Math.min(G.acc + dt, subMs * Sim.SUB); // after a long stall, don't try to catch up more than a day
+    while (G.acc >= subMs) {
+      G.acc -= subMs;
+      const tail = st.log[st.log.length - 1], nLoot = st.loot.length;
+      const ev = Sim.step(st);
+      stepped = true;
+      if (!G.ev) G.ev = ev; else for (const k in ev) G.ev[k].push(...ev[k]);
+      if (ev.booms.length || ev.pickups.length || ev.jumps.length || st.log[st.log.length - 1] !== tail || st.loot.length !== nLoot) G.dirty = true;
+      if (st.sub === 0) newDay = true;
+    }
+  } else G.acc = 0;
+  if (newDay) {
+    G.dirty = true;
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(st)); } catch (e) { /* storage full or blocked */ }
   }
-  G.wasIdle = !!idle;
-  const anySkip = Object.values(G.st.players).some(p => p.online && p.ready);
-  const paused = idle && !anySkip ? idle : '';
-  if (paused !== (G.paused || '')) {
-    G.paused = paused;
-    if (!paused) G.nextTurnAt = Math.max(now + G.turnTimer * 1000, G.turnLock + 1000); // full turn after unpausing
-    dirty();
-  }
-  if (paused) { if (G.dirty) broadcast(); return; }
-  if (now >= G.turnLock) {
-    const rd = readiness();
-    if (allDone(rd) && now >= G.fastAt) return doTurn();
-    if (G.turnTimer > 0 && now >= G.nextTurnAt) return doTurn();
-    if (JSON.stringify(rd) !== JSON.stringify(G.rd)) dirty();
-  }
-  if (G.dirty) broadcast();
+  if ((stepped || G.ev) && now - G.lastTick >= TICK_EVERY) sendTick();
+  if (G.dirty && (newDay || now - G.lastFull >= FULL_EVERY)) sendFull();
 }
 
-function doTurn() {
-  const anim = Sim.resolveTurn(G.st);
-  const now = performance.now();
-  // playback of this day starts when the previous one ends (chained) or right now
-  const start = G.playEnd && G.playEnd > now ? G.playEnd : now;
-  G.playEnd = start + ANIM_MS;
-  G.turnLock = G.playEnd - FAST_LEAD;
-  G.fastAt = G.playEnd - FAST_LEAD;
-  G.nextTurnAt = start + Math.max(G.turnTimer * 1000, ANIM_MS);
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(G.st)); } catch (e) { /* storage full or blocked */ }
-  broadcast(anim);
+// positions of every ship in the systems players are looking at: [id, sys, x, y, heading*100, hull, landed]
+function snapShips(st) {
+  const watch = new Set();
+  for (const pid in st.players) { const s = st.ships[pid]; if (s && st.players[pid].online) watch.add(s.jump ? s.jump.to : s.sys); }
+  const out = [];
+  for (const id in st.ships) {
+    const s = st.ships[id];
+    if (s.jump || s.sys == null || !Sim.alive(s) || !watch.has(s.sys)) continue;
+    out.push([id, s.sys, Math.round(s.x), Math.round(s.y), s.hd == null ? null : Math.round(s.hd * 100), Math.ceil(s.hull), s.landed ? 1 : 0]);
+  }
+  return out;
 }
 
-function broadcast(anim = null) {
+function sendTick() {
+  const msg = { t: 'tick', T: Sim.nowT(G.st), subMs: DAY_MS / G.speed / Sim.SUB, s: snapShips(G.st), ev: G.ev };
+  G.ev = null;
+  G.lastTick = performance.now();
+  if (G.net.conns.size) G.net.broadcast(msg);
+  applyTick(msg);
+}
+
+function sendFull() {
   G.dirty = false;
+  G.lastFull = performance.now();
   const st = G.st;
   if (st.log.length > 150) st.log.splice(0, st.log.length - 150);
-  const now = performance.now(), rd = readiness();
-  const fast = allDone(rd);
-  const timer = G.turnTimer > 0 ? Math.max(0, (fast ? Math.max(G.fastAt, G.turnLock) : G.nextTurnAt) - now) : 0;
-  const msg = { t: 'state', st, anim, rd, timer, period: G.turnTimer * 1000, fast, paused: G.paused || '' };
+  const msg = { t: 'state', st, paused: G.paused, speed: G.speed };
   if (G.net.conns.size) G.net.broadcast(msg);
   applyState(msg);
 }
@@ -248,7 +233,7 @@ async function joinRoom(code) {
       const first = !G.view;
       applyState(m);
       if (first && G.me) enterGame();
-    }
+    } else if (m.t === 'tick') applyTick(m);
   };
   net.onLeave = () => { if (G.net === net && !G.rejected) reconnect(code); };
   net.onStatus = t => UI.toast(t);
@@ -276,16 +261,18 @@ async function reconnect(code) {
 // ---------------------------------------------------------------- shared
 
 function applyState(m) {
-  const prev = G.st && G.st.ships[G.me];
-  const prevLanded = prev && prev.landed, prevJump = prev && !!prev.jump;
+  // (the host's state is the same object it keeps mutating, so remember the flags we saw last time)
+  const prev = G.prevMe;
+  const prevLanded = prev && prev.landed, prevJump = prev && prev.jump;
   G.st = m.st;
-  G.rd = m.rd || {};
-  G.timerEnd = m.timer ? performance.now() + m.timer : 0;
-  G.timerPeriod = m.period || 0;
-  G.fast = !!m.fast;
-  G.paused = m.paused || '';
-  if (m.anim && G.view) G.view.startAnim(m.anim);
+  const cur = G.st.ships[G.me];
+  G.prevMe = cur && { landed: cur.landed, jump: !!cur.jump };
+  G.paused = !!m.paused;
+  G.speed = m.speed || 1;
   if (!G.view) return;
+  // joined while the world stands still: no ticks are coming, so take positions from the state itself
+  const last = G.view.snaps[G.view.snaps.length - 1];
+  if (!last || last.T < Sim.nowT(G.st)) G.view.pushTick({ T: Sim.nowT(G.st), subMs: DAY_MS / G.speed / Sim.SUB, s: snapShips(G.st) });
   const me = G.st.ships[G.me];
   if (me && me.landed !== prevLanded) { G.planetHidden = null; if (me.landed) G.sel = null; }
   if (me && prev) {
@@ -304,6 +291,16 @@ const LOG_SOUNDS = [
   [/Награда/, 'coin'], [/Установлено/, 'buyEq'],
   [/Недостаточно|Нет денег|не поместится|Нет свободных|Нет места|слоты заняты|Сначала сним|нельзя снять|отказала|невозможна|Не хватает|Слишком далеко/, 'error'],
 ];
+// Positions between full states: patch the state we have and feed the renderer.
+function applyTick(m) {
+  if (!G.st) return;
+  if (!G.isHost) {
+    G.st.day = Math.floor(m.T / Sim.SUB); G.st.sub = m.T % Sim.SUB;
+    for (const e of m.s) { const s = G.st.ships[e[0]]; if (s) { s.x = e[2]; s.y = e[3]; if (e[4] != null) s.hd = e[4] / 100; s.hull = e[5]; } }
+  }
+  if (G.view) G.view.pushTick(m);
+}
+
 function logSounds() {
   const log = G.st.log;
   const key = e => e.day + '|' + e.text + '|' + e.to;
@@ -348,7 +345,7 @@ function enterGame() {
   if (!G.isHost) $('room').innerHTML = `Комната: <b>${G.code}</b>`;
 
   UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
-  $('endturn').onclick = toggleReady;
+  $('endturn').onclick = togglePause;
   $('planetbtn').onclick = togglePlanet;
   const vs = Audio.getSettings();
   for (const kind of ['music', 'sfx']) {
@@ -356,7 +353,7 @@ function enterGame() {
     el.value = vs[kind];
     el.oninput = () => { Audio.initAudio(); Audio.setVolume(kind, +el.value); if (kind === 'sfx') Audio.ui('click'); };
   }
-  $('timer').onchange = e => { G.turnTimer = +e.target.value; G.nextTurnAt = performance.now() + G.turnTimer * 1000; dirty(); };
+  $('speed').onchange = e => { G.speed = +e.target.value; dirty(); };
   $('chat').addEventListener('keydown', e => {
     if (e.key === 'Enter') { const t = e.target.value.trim(); if (t) G.send({ t: 'chat', text: t }); e.target.value = ''; e.target.blur(); }
     if (e.key === 'Escape') e.target.blur();
@@ -377,7 +374,7 @@ function enterGame() {
   cv.addEventListener('pointerleave', () => { G.hover = null; UI.tooltip(G, null); });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (e.code === 'Space') { e.preventDefault(); toggleReady(); }
+    if (e.code === 'Space') { e.preventDefault(); togglePause(); }
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
     else if (e.code === 'KeyP') togglePlanet();
@@ -406,11 +403,13 @@ function togglePlanet() {
   else showPlanet();
 }
 
-function toggleReady() {
+// Space asks for a pause; time stops once every online player has asked.
+function togglePause() {
   const pl = G.st.players[G.me];
-  const v = !pl.ready;
-  G.send({ t: 'ready', v });
-  pl.ready = v;
+  const v = !pl.pause;
+  G.send({ t: 'pause', v });
+  pl.pause = v;
+  Audio.ui('click');
   UI.players(G);
 }
 
@@ -431,25 +430,24 @@ function click(x, y) {
   refreshUI();
 }
 
-let lastUi = 0, wasAnimating = false;
+let lastUi = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   if (!G.st || !G.st.ships[G.me]) return;
-  const { animating } = G.view.update(G.st, G.me, G.sel);
-  UI.turnInfo(G, animating);
+  G.view.update(G.st, G.me, G.sel);
+  UI.turnInfo(G);
   if (G.hover && now - G.hover.t > 120) {
     G.hover.t = now;
     const hit = G.hover.drag ? null : G.view.pick(G.hover.x, G.hover.y);
     UI.tooltip(G, hit, G.hover.x, G.hover.y);
     G.view.renderer.domElement.style.cursor = hit && hit.type !== 'point' ? 'pointer' : 'crosshair';
   }
-  if (now - lastUi > 250 || wasAnimating !== animating) {
+  if (now - lastUi > 250) {
     lastUi = now;
     UI.player();
+    UI.hud(G);
     const me = G.st.ships[G.me];
     Audio.setTension(!!(me && !me.jump && !me.landed && Object.values(G.st.ships).some(c =>
       c.sys === me.sys && c !== me && !c.landed && !c.jump && (Sim.hostileTo(c, me) || Sim.hostileTo(me, c)) && Math.hypot(c.x - me.x, c.y - me.y) < 2200)));
-    if (wasAnimating && !animating) refreshUI();
-    wasAnimating = animating;
   }
 }

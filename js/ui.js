@@ -1,7 +1,7 @@
 // DOM user interface: HUD, planet screens, selection, log, galaxy map.
 import * as D from './data.js';
 import * as Audio from './audio.js';
-import { stats, cargoUsed, itemsUsed, sysDist, jumpCost, jumpDays, findPlanet, sellPrice, hostileTo, dist, planetPos } from './sim.js';
+import { SUB, stats, cargoUsed, itemsUsed, sysDist, jumpCost, jumpDays, findPlanet, sellPrice, hostileTo, dist, planetPos, tNow } from './sim.js';
 
 const $ = id => document.getElementById(id);
 const hex = c => '#' + c.toString(16).padStart(6, '0');
@@ -28,7 +28,7 @@ export function hud(G) {
     `<span>⚔ ${s.weapons.length ? s.weapons.map(w => D.byId(D.WEAPONS, w).name).join(', ') : '—'}</span>` +
     (s.wanted > 0 ? `<span class="wanted">РОЗЫСК ${s.wanted} дн.</span>` : '');
   $('hyper').hidden = !s.jump;
-  if (s.jump) $('hyper').innerHTML = `Гиперпространство<br><small>${esc(st.systems[s.jump.from].name)} → ${esc(st.systems[s.jump.to].name)} · осталось ${s.jump.left} дн.</small>`;
+  if (s.jump) $('hyper').innerHTML = `Гиперпространство<br><small>${esc(st.systems[s.jump.from].name)} → ${esc(st.systems[s.jump.to].name)} · осталось ${Math.ceil(s.jump.left / SUB)} дн.</small>`;
 }
 
 export function players(G) {
@@ -37,38 +37,38 @@ export function players(G) {
   for (const pid in st.players) {
     const p = st.players[pid], s = st.ships[pid];
     const loc = !s ? '' : s.jump ? '⇢ ' + st.systems[s.jump.to].name : st.systems[s.sys].name;
-    const rd = G.rd && G.rd[pid];
-    const [label, ok] = !p.online ? ['offline', 0] : rd === 'skip' ? ['⏩ ускорить', 1] : ['⏱ обычное', 0];
-    h += `<div class="p ${p.online ? '' : 'off'}"><span class="dot" style="background:${hex(p.color)}"></span>${esc(p.name)}${pid === G.me ? ' (вы)' : ''}<span class="st ${ok ? 'ok' : ''}" title="${esc(loc)}">${label}</span></div>`;
+    const [label, cls] = !p.online ? ['offline', ''] : p.pause ? ['⏸ пауза', 'warn'] : ['▶ в игре', 'ok'];
+    h += `<div class="p ${p.online ? '' : 'off'}"><span class="dot" style="background:${hex(p.color)}"></span>${esc(p.name)}${pid === G.me ? ' (вы)' : ''}<span class="st ${cls}" title="${esc(loc)}">${label}</span></div>`;
   }
-  $('players').innerHTML = h;
+  setHtml($('players'), h);
   const me = st.players[G.me];
   const bt = $('endturn');
-  bt.classList.toggle('ready', !!(me && me.ready));
-  bt.textContent = me && me.ready ? '⏩ Ускорение ВКЛ [Пробел]' : '⏱ Ускорить время [Пробел]';
-  bt.title = 'Время ускоряется, только когда ускорение включили все игроки. Нажмите ещё раз, чтобы выключить.';
+  bt.classList.toggle('ready', !!(me && me.pause));
+  bt.textContent = me && me.pause ? '▶ Снять паузу [Пробел]' : '⏸ Пауза [Пробел]';
+  bt.title = 'Время останавливается, когда паузу нажали все игроки. Нажмите ещё раз, чтобы снять свою.';
+  if ($('speed').value !== String(G.speed)) $('speed').value = String(G.speed);
 }
 
-export function turnInfo(G, animating) {
-  const box = $('bigtimer');
-  const left = G.timerEnd ? Math.max(0, G.timerEnd - performance.now()) : 0;
-  let num, cap, frac;
-  if (animating) { num = '▶'; cap = 'день ' + G.st.day; frac = 1; }
-  else if (G.paused) { num = '⏸'; cap = (G.paused === 'landed' ? 'пауза — все на планетах' : 'пауза — никто не отдал приказ') + ' · Пробел — пустить время'; frac = 0; }
-  else if (G.fast) { num = '⏩'; cap = 'все включили ускорение'; frac = left / 1000; }
-  else if (!G.timerPeriod) { num = '⏸'; cap = 'ждём, пока все включат ускорение'; frac = 0; }
-  else { num = Math.ceil(left / 1000); cap = 'до следующего дня'; frac = left / G.timerPeriod; }
-  const key = num + '|' + cap;
-  if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = num; box.querySelector('.cap').textContent = cap; }
-  box.querySelector('.bar i').style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
-  const clock = gameClock(animating && G.view.anim ? G.view.anim.day + G.view.animFrac() : G.st.day);
-  if (box.dataset.c !== clock) { box.dataset.c = clock; box.querySelector('.date').textContent = clock; }
-  box.classList.toggle('paused', !!G.paused && !animating);
-  box.classList.toggle('urgent', !animating && !G.fast && !G.paused && G.timerPeriod > 0 && left < 3000);
-  box.classList.toggle('fast', !!G.fast);
+// Big clock at the top: in-game date and time, pause status.
+export function turnInfo(G) {
+  const box = $('bigtimer'), st = G.st;
+  const T = G.view ? G.view.T : tNow(st) * SUB; // what is on screen right now, in substeps
+  const on = Object.values(st.players).filter(p => p.online), asked = on.filter(p => p.pause);
+  const c = gameClock(T / SUB);
+  let cap;
+  if (G.paused) cap = 'ПАУЗА · Пробел — продолжить';
+  else if (asked.length) cap = `паузу просят: ${asked.map(p => p.name).join(', ')} (${asked.length} из ${on.length})`;
+  else cap = 'Пробел — пауза' + (G.speed !== 1 ? ' · скорость ×' + G.speed : '');
+  const key = c.hm + '|' + cap;
+  if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = G.paused ? '⏸ ' + c.hm : c.hm; box.querySelector('.cap').textContent = cap; }
+  if (box.dataset.c !== c.date) { box.dataset.c = c.date; box.querySelector('.date').textContent = c.date; }
+  box.querySelector('.bar i').style.width = (T % SUB) / SUB * 100 + '%'; // how far into the day
+  box.classList.toggle('paused', !!G.paused);
+  box.classList.toggle('urgent', !G.paused && asked.length > 0);
+  box.classList.toggle('fast', !G.paused && G.speed > 1);
 }
 
-// In-game calendar: day 0 = 1 January 3301, hours tick along while a day is animated.
+// In-game calendar: day 0 = 1 January 3301, a day is SUB substeps of real time.
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const MDAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 export function gameClock(t) {
@@ -77,7 +77,7 @@ export function gameClock(t) {
   while (d >= MDAYS[m]) d -= MDAYS[m++];
   const mins = Math.floor((t - Math.floor(t)) * 24 * 60 / 10) * 10;
   const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
-  return `${d + 1} ${MONTHS[m]} ${year} · ${hh}:${mm} · день ${Math.floor(t)}`;
+  return { date: `${d + 1} ${MONTHS[m]} ${year} · день ${Math.floor(t)}`, hm: hh + ':' + mm };
 }
 
 export function log(G) {
@@ -334,7 +334,7 @@ export function ship(G) {
   if (zone) h += `<div class="outzone" data-zone="out">${zone}</div>`;
   h += '<div id="invdetail" class="detail"></div>';
   h += `<div class="meta" style="margin-top:6px">💰 Кредиты: <b style="color:#fff">${fmt(s.credits)}</b> · двойной клик — установить / снять</div>`;
-  $('shipbody').innerHTML = h;
+  setHtml($('shipbody'), h);
   invDetail(G);
 }
 
@@ -484,7 +484,7 @@ export function planet(G) {
     h += `<p class="meta">Статистика: уничтожено кораблей — ${s.kills}.</p>`;
   }
   h += `<div class="row">${btn('🚀 Взлететь сейчас', { type: 'takeoff' })}</div>`;
-  box.innerHTML = h;
+  setHtml(box, h);
 }
 
 export function bindPlanet(G) {
@@ -537,7 +537,7 @@ export function describe(G, obj) {
   if (!obj || !me || me.jump) return '';
   if (obj.type === 'ship') {
     const s = st.ships[obj.id];
-    if (!s || s.sys !== me.sys || s.jump) return '';
+    if (!s || s.sys !== me.sys || s.jump || s.dead != null) return '';
     const S = stats(s);
     const [rel, relCol] = RELATION[s.id === G.me ? 'ally' : relation(me, s)];
     let h = `<div class="t" style="color:${hex(s.color)}">${esc(s.name)} <small style="color:var(--dim)">${D.KIND_NAMES[s.kind]}${s.id === G.me ? ' (вы)' : ''}</small>`;
@@ -575,7 +575,7 @@ export function describe(G, obj) {
     }
     const landed = Object.values(st.ships).filter(s => s.landed === p.id);
     if (landed.length) h += '<br>На планете: ' + landed.map(s => `<span style="color:${hex(s.color)}">${esc(s.name)}</span>`).join(', ');
-    const [px, py] = planetPos(p, st.day);
+    const [px, py] = planetPos(p, tNow(st));
     if (me.landed !== p.id) h += `<br>Дистанция ${Math.round(dist(px, py, me.x, me.y))}`;
     return h + '</div>';
   }
@@ -612,9 +612,20 @@ export function selinfo(G) {
     }
   } else if (sel.type === 'planet') { if (me.landed !== sel.id) acts = btn('Сесть', { type: 'land', planet: sel.id }); }
   else if (sel.type === 'loot') acts = btn('Подобрать', { type: 'loot', id: sel.id });
-  h += '<div class="btns"><button data-focus="1" title="Навести камеру на объект">🎯 Фокус [F]</button>' + acts + '</div>';
+  const btns = '<button data-focus="1" title="Навести камеру на объект">🎯 Фокус [F]</button>' + acts;
   box.hidden = false;
-  box.innerHTML = h;
+  // the description (distance, hull) changes all the time; the buttons are rebuilt only when they change,
+  // so a click never lands on a button that was just replaced
+  if (!box.firstElementChild || !box.firstElementChild.classList.contains('info')) box.innerHTML = '<div class="info"></div><div class="btns"></div>';
+  setHtml(box.firstElementChild, h);
+  setHtml(box.lastElementChild, btns);
+}
+
+// replace an element's contents only when they actually changed
+function setHtml(el, h) {
+  if (el._h === h) return;
+  el._h = h;
+  el.innerHTML = h;
 }
 
 // Hover tooltip that follows the cursor (3D view, inventory tiles).

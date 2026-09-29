@@ -1,6 +1,5 @@
-// Authoritative game simulation. Runs only on the host.
-// One turn = one day. All players submit orders simultaneously (WEGO),
-// then the host resolves the day in SUB sub-steps and broadcasts the result.
+// Authoritative game simulation. Runs only on the host, in real time:
+// a day is SUB substeps, the host advances one substep at a time and streams the result.
 import * as D from './data.js';
 
 export const SUB = 20;
@@ -35,6 +34,8 @@ export const sysDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 export const jumpCost = d => Math.ceil(d);
 export const jumpDays = d => Math.max(1, Math.ceil(d / 9));
 export const alive = s => s.dead == null;
+export const nowT = st => st.day * SUB + (st.sub || 0); // global time in substeps
+export const tNow = st => nowT(st) / SUB;                 // the same in days
 export const sellPrice = p => Math.floor(p * 0.9);
 
 export function findPlanet(st, pid) {
@@ -167,14 +168,14 @@ function edgePos() { const a = rnd(0, Math.PI * 2); return [Math.cos(a) * ARRIVE
 
 function spawnTrader(st, sys) {
   const p = pick(sys.planets);
-  const [x, y] = planetPos(p, st.day);
+  const [x, y] = planetPos(p, tNow(st));
   const s = makeShip(st, 'trader', sys.id, x, y, { name: pick(D.TRADER_NAMES) + ' ' + rint(10, 99), eq: eqT(rint(0, 2), 0), cargo: randCargo(2, [8, 30]), credits: rint(300, 1500), spdMul: 0.85 });
   s.landed = p.id; s.ai.wait = rint(0, 3);
   return s;
 }
 function spawnMilitia(st, sys) {
   const p = pick(sys.planets);
-  const [x, y] = planetPos(p, st.day);
+  const [x, y] = planetPos(p, tNow(st));
   const t = Math.min(3, 1 + Math.floor(tierNow(st) / 2));
   return makeShip(st, 'militia', sys.id, x + 80, y, { name: 'Патруль ' + rint(100, 999), eq: eqT(t, 1), weapons: t > 1 ? ['w2', 'w1'] : ['w1'], credits: 200 });
 }
@@ -207,10 +208,10 @@ export function addPlayer(st, name, color) {
   for (const id in st.players) if (st.players[id].name === name) { st.players[id].online = true; st.players[id].color = color; return id; }
   const sys = st.systems[0];
   const p = pick(sys.planets);
-  const [x, y] = planetPos(p, st.day);
+  const [x, y] = planetPos(p, tNow(st));
   const s = makeShip(st, 'player', 0, x, y, { name, color, weapons: ['w1'], credits: 3000 });
   s.landed = p.id;
-  st.players[s.id] = { name, color, ready: false, online: true };
+  st.players[s.id] = { name, color, pause: false, online: true };
   log(st, name + ' вступил в ряды рейнджеров.');
   return s.id;
 }
@@ -279,14 +280,14 @@ export function act(st, pid, a) {
       if (q <= 0 || s.jump || s.sys == null) return;
       s.cargo[a.good] -= q;
       if (!s.cargo[a.good]) delete s.cargo[a.good];
-      if (!s.landed) st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: { [a.good]: q }, items: [], ttl: 20 });
+      if (!s.landed) st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: { [a.good]: q }, items: [], ttl: 20, t0: nowT(st) });
       return say('Выброшено за борт: ' + q + ' ' + D.byId(D.GOODS, a.good).name);
     }
     case 'dropItem': {
       const i = s.items.findIndex(it => it.u === a.u);
       if (i < 0 || s.jump || s.sys == null || s.landed) return;
       const [it] = s.items.splice(i, 1);
-      st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: {}, items: [it], ttl: 30 });
+      st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: {}, items: [it], ttl: 30, t0: nowT(st) });
       return say('Выброшено за борт: ' + itemName(it.id));
     }
     case 'equip': return equipItem(st, s, a, say);
@@ -382,18 +383,13 @@ export function act(st, pid, a) {
   }
 }
 
-// ---------------------------------------------------------------- turn readiness
+// ---------------------------------------------------------------- pause votes
 
-function inDanger(st, s) {
-  return shipsIn(st, s.sys).some(c => c !== s && !c.landed && hostileTo(c, s) && dist(c.x, c.y, s.x, s.y) < 1400);
+// Time stops only while every online player asks for a pause.
+export function allPaused(st) {
+  const on = Object.values(st.players).filter(p => p.online);
+  return on.length > 0 && on.every(p => p.pause);
 }
-// Time only speeds up when every online player has switched "skip" on (Space toggles it).
-export function readyReason(st, pid) {
-  const pl = st.players[pid], s = st.ships[pid];
-  if (!pl || !pl.online || !s) return 'off';
-  return pl.ready ? 'skip' : '';
-}
-export const playerReady = (st, pid) => readyReason(st, pid) !== '';
 
 // ---------------------------------------------------------------- AI
 
@@ -418,7 +414,7 @@ function aiThink(st, s) {
       } else if (sys.owner === 'dom') flee();
       else if (threatened() && s.hull < stats(s).maxHull * 0.6 && R() < 0.5) {
         let best = null, bd = 1e9;
-        for (const p of sys.planets) { const [px, py] = planetPos(p, st.day); const d = dist(px, py, s.x, s.y); if (d < bd) { bd = d; best = p; } }
+        for (const p of sys.planets) { const [px, py] = planetPos(p, tNow(st)); const d = dist(px, py, s.x, s.y); if (d < bd) { bd = d; best = p; } }
         s.order = { type: 'land', planet: best.id };
       } else if (!s.order) s.order = { type: 'land', planet: pick(sys.planets).id };
       break;
@@ -573,7 +569,7 @@ export function predictPath(st, ship, days = 3) {
   if (ship.landed && ship.order.type === 'land' && ship.order.planet === ship.landed) return pts;
   const s = { ...ship, landed: null, order: { ...ship.order }, ai: { ...ship.ai } };
   for (let k = 1; k <= days * SUB; k++) {
-    const r = stepShip(st, s, st.day + k / SUB, true);
+    const r = stepShip(st, s, tNow(st) + k / SUB, true);
     if (r && r.cancel) break;
     pts.push(r && r.tx != null && ship.order.type === 'land' ? [r.tx, r.ty] : [s.x, s.y]);
     if (r) break;
@@ -581,9 +577,9 @@ export function predictPath(st, ship, days = 3) {
   return pts;
 }
 
-// ---------------------------------------------------------------- turn resolution
+// ---------------------------------------------------------------- deaths
 
-function dropLoot(st, s) {
+function dropLoot(st, s, T) {
   const player = s.kind === 'player';
   const cargo = {};
   for (const g in s.cargo) { const q = Math.floor(s.cargo[g] * (player ? 0.7 : 1)); if (q > 0) cargo[g] = q; }
@@ -602,13 +598,13 @@ function dropLoot(st, s) {
     items.push(...(s.items || []));
   }
   if (!credits && !Object.keys(cargo).length && !items.length) return;
-  st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x, y: s.y, credits, cargo, items, ttl: items.length ? 30 : 20 });
+  st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x, y: s.y, credits, cargo, items, ttl: items.length ? 30 : 20, t0: T });
 }
 
-function destroy(st, s, k, killer, anim) {
-  s.dead = k;
-  anim.booms.push({ sys: s.sys, x: s.x, y: s.y, k, big: s.kind === 'citadel' ? 3 : 1 });
-  dropLoot(st, s);
+function destroy(st, s, T, killer, ev) {
+  s.dead = T;
+  ev.booms.push({ sys: s.sys, x: Math.round(s.x), y: Math.round(s.y), T, big: s.kind === 'citadel' ? 3 : 1 });
+  dropLoot(st, s, T);
   const kp = killer && killer.kind === 'player' ? killer : null;
   if (kp) {
     kp.kills++;
@@ -619,7 +615,7 @@ function destroy(st, s, k, killer, anim) {
   if (s.kind === 'citadel') {
     const sys = st.systems[s.sys];
     sys.owner = 'coal'; sys.citadel = null; sys.cap = 0;
-    for (const o of shipsIn(st, sys.id)) if (o.kind === 'dom') { o.dead = k; anim.booms.push({ sys: o.sys, x: o.x, y: o.y, k: Math.min(SUB, k + 2), big: 1 }); }
+    for (const o of shipsIn(st, sys.id)) if (o.kind === 'dom') { o.dead = T; ev.booms.push({ sys: o.sys, x: Math.round(o.x), y: Math.round(o.y), T: T + 2, big: 1 }); }
     const heroes = shipsIn(st, sys.id).filter(o => o.kind === 'player');
     for (const h of heroes) h.credits += 10000;
     log(st, '★ Система ' + sys.name + ' освобождена от доминаторов! ' + heroes.map(h => h.name).join(', ') + ' получают по 10000 кр.');
@@ -632,26 +628,44 @@ function respawn(st, s) {
   const cands = st.systems.filter(x => x.owner === 'coal').sort((a, b) => sysDist(a, from) - sysDist(b, from));
   const sys = cands[0] || st.systems[0];
   const p = pick(sys.planets);
-  const [x, y] = planetPos(p, st.day);
+  const [x, y] = planetPos(p, tNow(st));
   const S = stats(s);
   Object.assign(s, { dead: undefined, sys: sys.id, x, y, landed: p.id, order: null, jump: null, hull: S.maxHull, fuel: S.maxFuel, cargo: {}, items: [], credits: Math.floor(s.credits * 0.75), wanted: 0, aggro: {} });
   log(st, 'Спасательная капсула доставила вас на ' + p.name + ' (' + sys.name + '). Груз потерян.', s.id);
 }
 
-export function resolveTurn(st) {
-  const anim = { day: st.day, frames: {}, shots: [], booms: [], pickups: [], out: [] };
+// ---------------------------------------------------------------- real-time simulation
+// The world advances in substeps (SUB per day); the host calls step() on a real-time clock,
+// so orders take effect on the very next substep. What happens is reported as events stamped
+// with the global substep time T (day * SUB + substep) for the clients to animate.
+
+const DEATH_LINGER = 10; // substeps a wreck stays in the state, so clients see the explosion first
+
+export function step(st) {
+  const ev = { shots: [], booms: [], pickups: [], jumps: [] };
+  st.sub ||= 0;
+  const T = nowT(st) + 1; // the moment this step brings the world to
+  const t = T / SUB;      // the same in days (planet orbits)
   const ships = Object.values(st.ships);
+  if (st.sub === 0) for (const s of ships) if (alive(s)) aiThink(st, s);
 
-  for (const s of ships) aiThink(st, s);
-
-  // take-offs and jump starts
+  // take-offs, jump starts and hyperspace travel
   for (const s of ships) {
-    if (s.jump) continue;
+    if (!alive(s)) continue;
+    if (s.jump) {
+      if (--s.jump.left > 0) continue;
+      const a = st.systems[s.jump.from], b = st.systems[s.jump.to];
+      const ang = Math.atan2(a.y - b.y, a.x - b.x) + rnd(-0.3, 0.3);
+      s.sys = b.id; s.x = Math.cos(ang) * ARRIVE_R; s.y = Math.sin(ang) * ARRIVE_R; s.hd = ang + Math.PI;
+      s.jump = null;
+      if (s.kind === 'player') log(st, s.name + ' прибыл в систему ' + b.name);
+      continue;
+    }
     if (s.landed && s.order && !(s.order.type === 'land' && s.order.planet === s.landed)) {
       const p = findPlanet(st, s.landed);
       s.landed = null;
       const a = rnd(0, Math.PI * 2);
-      if (p) { s.x += Math.cos(a) * (p.size + 40); s.y += Math.sin(a) * (p.size + 40); }
+      if (p) { s.x += Math.cos(a) * (p.size + 40); s.y += Math.sin(a) * (p.size + 40); s.hd = a; }
     }
     if (s.order && s.order.type === 'jump') {
       const a = st.systems[s.sys], b = st.systems[s.order.to];
@@ -660,137 +674,131 @@ export function resolveTurn(st) {
         if (d > stats(s).jumpRange || s.fuel < jumpCost(d)) { s.order = null; continue; }
         s.fuel -= jumpCost(d);
       }
-      anim.frames[s.id] = { sys: s.sys, p: [Math.round(s.x), Math.round(s.y), 1], out: 1 };
-      s.jump = { from: a.id, to: b.id, left: jumpDays(d), total: jumpDays(d) };
+      ev.jumps.push({ id: s.id, sys: s.sys, x: Math.round(s.x), y: Math.round(s.y), T });
+      s.jump = { from: a.id, to: b.id, left: jumpDays(d) * SUB, total: jumpDays(d) * SUB }; // in substeps
       s.order = null;
       s.sys = null;
       if (s.kind === 'player') log(st, s.name + ' уходит в гиперпрыжок: ' + a.name + ' → ' + b.name);
     }
   }
 
-  const active = ships.filter(s => s.sys != null && !s.jump);
+  const active = ships.filter(s => s.sys != null && !s.jump && alive(s));
   const bySys = {};
   for (const s of active) (bySys[s.sys] ||= []).push(s);
-  const rec = s => {
-    const f = anim.frames[s.id] ||= { sys: s.sys, p: [] };
-    f.p.push(Math.round(s.x), Math.round(s.y), s.landed ? 0 : 1);
-  };
-  const landedPos = (s, t) => { const p = findPlanet(st, s.landed); if (p) [s.x, s.y] = planetPos(p, t); };
-  for (const s of active) { if (s.landed) landedPos(s, st.day); rec(s); }
-  const fired = {};
 
-  for (let k = 1; k <= SUB; k++) {
-    const t = st.day + k / SUB;
-    // movement
-    for (const s of active) {
-      if (!alive(s)) continue;
-      if (s.landed) { landedPos(s, t); continue; }
-      const o = s.order;
-      if (!o) continue;
-      const r = stepShip(st, s, t);
-      if (!r) continue;
-      if (r.cancel) { s.order = null; continue; }
-      if (o.type === 'move') s.order = null;
-      else if (o.type === 'land') {
-        const sys = st.systems[s.sys];
-        if (sys.owner === 'dom' && s.kind !== 'dom') { s.order = null; if (s.kind === 'player') log(st, 'Планета оккупирована доминаторами — посадка невозможна', s.id); }
-        else if (s.kind === 'player' && s.wanted > 0) { s.order = null; log(st, 'Вы в розыске — планета отказала в посадке (ещё ' + s.wanted + ' дн.)', s.id); }
-        else {
-          s.landed = o.planet; s.order = null; s.ai.wait = rint(1, 3);
-          [s.x, s.y] = [r.tx, r.ty];
-          if (s.kind === 'player') log(st, 'Посадка на ' + findPlanet(st, o.planet).name, s.id);
-        }
+  // movement
+  for (const s of active) {
+    if (s.landed) { const p = findPlanet(st, s.landed); if (p) [s.x, s.y] = planetPos(p, t); continue; }
+    const o = s.order;
+    if (!o) continue;
+    const r = stepShip(st, s, t);
+    if (!r) continue;
+    if (r.cancel) { s.order = null; continue; }
+    if (o.type === 'move') s.order = null;
+    else if (o.type === 'land') {
+      const sys = st.systems[s.sys];
+      if (sys.owner === 'dom' && s.kind !== 'dom') { s.order = null; if (s.kind === 'player') log(st, 'Планета оккупирована доминаторами — посадка невозможна', s.id); }
+      else if (s.kind === 'player' && s.wanted > 0) { s.order = null; log(st, 'Вы в розыске — планета отказала в посадке (ещё ' + s.wanted + ' дн.)', s.id); }
+      else {
+        s.landed = o.planet; s.order = null; s.ai.wait = rint(1, 3);
+        [s.x, s.y] = [r.tx, r.ty];
+        if (s.kind === 'player') log(st, 'Посадка на ' + findPlanet(st, o.planet).name, s.id);
       }
     }
-    // loot pickup: only by an explicit "pick up" order, never automatically
-    for (const s of active) {
-      if (s.kind !== 'player' || !alive(s) || s.landed || !s.order || s.order.type !== 'loot') continue;
-      for (const l of st.loot) {
-        if (l.id !== s.order.id || l.taken || dist(l.x, l.y, s.x, s.y) > 70) continue;
-        const cap = stats(s).cargoCap;
-        const got = [], left = [];
-        let gotEq = false;
-        if (l.credits) { s.credits += l.credits; got.push(l.credits + ' кр.'); l.credits = 0; }
-        // equipment first (worth more per unit of space), then goods into whatever room is left
-        const li = l.items ||= [];
-        for (let j = 0; j < li.length; j++) {
-          if (itemSize(li[j].id) > cap - cargoUsed(s)) { left.push(itemName(li[j].id)); continue; }
-          (s.items ||= []).push(li[j]);
-          got.push(itemName(li[j].id)); gotEq = true;
-          li.splice(j--, 1);
-        }
-        for (const g in l.cargo) {
-          const q = Math.min(l.cargo[g], cap - cargoUsed(s));
-          if (q > 0) { s.cargo[g] = (s.cargo[g] || 0) + q; l.cargo[g] -= q; got.push(q + ' ' + D.byId(D.GOODS, g).name); }
-          if (!l.cargo[g]) delete l.cargo[g];
-          else left.push(l.cargo[g] + ' ' + D.byId(D.GOODS, g).name);
-        }
-        if (!Object.keys(l.cargo).length && !li.length) l.taken = true;
-        if (got.length) {
-          log(st, 'Подобрано: ' + got.join(', '), s.id);
-          anim.pickups.push({ sys: s.sys, id: l.id, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken, eq: gotEq });
-        }
-        if (left.length) log(st, 'Не хватает места в трюме: ' + left.join(', '), s.id);
-        s.order = null;
-        break;
-      }
-    }
-    st.loot = st.loot.filter(l => !l.taken);
-    // combat: every weapon fires `shots` times a day (its daily damage split between them),
-    // with a cooldown between shots, so fights play out across the whole day
-    for (const s of active) {
-      if (!alive(s) || s.landed || !s.weapons.length) continue;
-      const list = bySys[s.sys];
-      const f = fired[s.id] ||= s.weapons.map(() => ({ n: 0, next: 1 + Math.floor(R() * 3) }));
-      for (let wi = 0; wi < s.weapons.length; wi++) {
-        const W = D.byId(D.WEAPONS, s.weapons[wi]);
-        const fw = f[wi];
-        if (fw.n >= W.shots || k < fw.next) continue;
-        let tg = null;
-        if (s.order && s.order.type === 'attack') {
-          const c = st.ships[s.order.target];
-          if (c && alive(c) && c.sys === s.sys && !c.landed && !c.jump && dist(c.x, c.y, s.x, s.y) <= W.range) tg = c;
-        }
-        if (!tg) tg = nearest(list, c => !c.landed && hostileTo(s, c), s, W.range);
-        if (!tg) continue;
-        fw.n++; fw.next = k + Math.floor(SUB / W.shots);
-        const dmg = Math.max(1, Math.round(W.dmg / W.shots * rnd(0.8, 1.2)));
-        tg.hull -= dmg;
-        anim.shots.push({ sys: s.sys, a: s.id, b: tg.id, k, w: W.id, d: dmg });
-        if (tg.kind === 'player' && !tg.aggro[s.id] && !hostileTo(tg, s)) log(st, '⚠ ' + s.name + ' атакует вас!', tg.id);
-        else if (tg.kind === 'player' && !tg.aggro[s.id] && k <= 2) log(st, '⚔ Бой: ' + s.name + ' открыл огонь', tg.id);
-        tg.aggro[s.id] = 4;
-        if (s.kind === 'player' && (tg.kind === 'trader' || tg.kind === 'militia')) {
-          if (!s.wanted) log(st, s.name + ' напал на ' + tg.name + ' и объявлен в розыск!');
-          s.wanted = 20;
-        }
-        if (tg.hull <= 0) destroy(st, tg, k, s, anim);
-      }
-    }
-    for (const s of active) if (alive(s)) rec(s);
   }
 
-  // ---- end of day
-  st.day++;
-  for (const s of Object.values(st.ships)) {
+  // loot pickup: only by an explicit "pick up" order, never automatically
+  for (const s of active) {
+    if (s.kind !== 'player' || s.landed || !s.order || s.order.type !== 'loot') continue;
+    for (const l of st.loot) {
+      if (l.id !== s.order.id || l.taken || dist(l.x, l.y, s.x, s.y) > 70) continue;
+      const cap = stats(s).cargoCap;
+      const got = [], left = [];
+      let gotEq = false;
+      if (l.credits) { s.credits += l.credits; got.push(l.credits + ' кр.'); l.credits = 0; }
+      // equipment first (worth more per unit of space), then goods into whatever room is left
+      const li = l.items ||= [];
+      for (let j = 0; j < li.length; j++) {
+        if (itemSize(li[j].id) > cap - cargoUsed(s)) { left.push(itemName(li[j].id)); continue; }
+        (s.items ||= []).push(li[j]);
+        got.push(itemName(li[j].id)); gotEq = true;
+        li.splice(j--, 1);
+      }
+      for (const g in l.cargo) {
+        const q = Math.min(l.cargo[g], cap - cargoUsed(s));
+        if (q > 0) { s.cargo[g] = (s.cargo[g] || 0) + q; l.cargo[g] -= q; got.push(q + ' ' + D.byId(D.GOODS, g).name); }
+        if (!l.cargo[g]) delete l.cargo[g];
+        else left.push(l.cargo[g] + ' ' + D.byId(D.GOODS, g).name);
+      }
+      if (!Object.keys(l.cargo).length && !li.length) l.taken = true;
+      if (got.length) {
+        log(st, 'Подобрано: ' + got.join(', '), s.id);
+        ev.pickups.push({ sys: s.sys, id: l.id, x: Math.round(l.x), y: Math.round(l.y), ship: s.id, T, text: '+' + got.join(', +'), all: !!l.taken, eq: gotEq });
+      }
+      if (left.length) log(st, 'Не хватает места в трюме: ' + left.join(', '), s.id);
+      s.order = null;
+      break;
+    }
+  }
+  st.loot = st.loot.filter(l => !l.taken);
+
+  // combat: every weapon fires `shots` times a day (its daily damage split between them)
+  // and then cools down for SUB / shots substeps
+  for (const s of active) {
+    if (!alive(s) || s.landed || !s.weapons.length) continue;
+    if (!s.cd || s.cd.length !== s.weapons.length) s.cd = s.weapons.map(() => rint(1, 3));
+    const list = bySys[s.sys];
+    for (let wi = 0; wi < s.weapons.length; wi++) {
+      if (s.cd[wi] > 0 && --s.cd[wi] > 0) continue;
+      const W = D.byId(D.WEAPONS, s.weapons[wi]);
+      let tg = null;
+      if (s.order && s.order.type === 'attack') {
+        const c = st.ships[s.order.target];
+        if (c && alive(c) && c.sys === s.sys && !c.landed && !c.jump && dist(c.x, c.y, s.x, s.y) <= W.range) tg = c;
+      }
+      if (!tg) tg = nearest(list, c => !c.landed && hostileTo(s, c), s, W.range);
+      if (!tg) continue; // stays loaded until something comes into range
+      s.cd[wi] = Math.floor(SUB / W.shots);
+      const dmg = Math.max(1, Math.round(W.dmg / W.shots * rnd(0.8, 1.2)));
+      tg.hull -= dmg;
+      // spread the volleys of one substep a little so guns don't all go off on the same frame
+      ev.shots.push({ sys: s.sys, a: s.id, b: tg.id, T: T + Math.floor(R() * 8) / 10, w: W.id, d: dmg });
+      if (tg.kind === 'player' && !tg.aggro[s.id]) log(st, hostileTo(tg, s) ? '⚔ Бой: ' + s.name + ' открыл огонь' : '⚠ ' + s.name + ' атакует вас!', tg.id);
+      tg.aggro[s.id] = 4;
+      if (s.kind === 'player' && (tg.kind === 'trader' || tg.kind === 'militia')) {
+        if (!s.wanted) log(st, s.name + ' напал на ' + tg.name + ' и объявлен в розыск!');
+        s.wanted = 20;
+      }
+      if (tg.hull <= 0) destroy(st, tg, T, s, ev);
+    }
+  }
+
+  // slow repairs: droids (and NPC crews) patch the hull a little every substep
+  for (const s of active) {
     if (!alive(s)) continue;
     const S = stats(s);
-    for (const k in s.aggro) if (--s.aggro[k] <= 0) delete s.aggro[k];
-    if (s.wanted > 0) s.wanted--;
-    if (S.repair) s.hull = Math.min(S.maxHull, s.hull + S.repair);
-    if (s.kind !== 'player') s.hull = Math.min(S.maxHull, s.hull + Math.ceil(S.maxHull * 0.03));
-    if (s.jump && --s.jump.left <= 0) {
-      const a = st.systems[s.jump.from], b = st.systems[s.jump.to];
-      const ang = Math.atan2(a.y - b.y, a.x - b.x) + rnd(-0.3, 0.3);
-      s.sys = b.id; s.x = Math.cos(ang) * ARRIVE_R; s.y = Math.sin(ang) * ARRIVE_R;
-      s.jump = null;
-      if (s.kind === 'player') log(st, s.name + ' прибыл в систему ' + b.name);
-    }
+    const rep = (S.repair + (s.kind !== 'player' ? Math.ceil(S.maxHull * 0.03) : 0)) / SUB;
+    if (rep && s.hull < S.maxHull) s.hull = Math.min(S.maxHull, s.hull + rep);
   }
-  for (const s of Object.values(st.ships)) {
-    if (alive(s)) continue;
+
+  // wrecks: NPCs vanish, players get the escape pod
+  for (const s of ships) {
+    if (alive(s) || T - s.dead < DEATH_LINGER) continue;
     if (s.kind === 'player') respawn(st, s);
     else delete st.ships[s.id];
+  }
+
+  if (++st.sub >= SUB) endOfDay(st);
+  return ev;
+}
+
+function endOfDay(st) {
+  st.day++;
+  st.sub = 0;
+  for (const s of Object.values(st.ships)) {
+    if (!alive(s)) continue;
+    for (const k in s.aggro) if (--s.aggro[k] <= 0) delete s.aggro[k];
+    if (s.wanted > 0) s.wanted--;
   }
   for (const l of st.loot) l.ttl--;
   st.loot = st.loot.filter(l => l.ttl > 0);
@@ -800,11 +808,13 @@ export function resolveTurn(st) {
     p.prices[g.id] = Math.max(5, Math.round(p.prices[g.id] + (target - p.prices[g.id]) * 0.07 + target * rnd(-0.03, 0.03)));
   }
   worldTick(st);
-  for (const id in st.players) {
-    const pl = st.players[id], s = st.ships[id];
-    if (pl.ready && s && !s.jump && !s.landed && inDanger(st, s)) { pl.ready = false; log(st, '⚠ Рядом враг — ускорение времени выключено', id); }
-  }
-  return anim;
+}
+
+// A whole day at once (tests and tools): all its events merged.
+export function runDay(st) {
+  const all = { shots: [], booms: [], pickups: [], jumps: [] };
+  do { const ev = step(st); for (const k in all) all[k].push(...ev[k]); } while (st.sub !== 0);
+  return all;
 }
 
 function worldTick(st) {

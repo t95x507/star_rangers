@@ -14,7 +14,7 @@ import * as Audio from './audio.js';
 import { buildNebulae } from './nebula.js';
 import { Trail } from './trails.js';
 
-export const ANIM_MS = 3000; // how long one game day plays on screen
+export const DAY_MS = 3000; // one game day at normal speed (effects and trails run on game time)
 
 function glowTexture(inner = 'rgba(255,255,255,1)', mid = 'rgba(255,200,120,0.35)') {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -46,7 +46,7 @@ function planetTexture(color, seed) {
   return t;
 }
 
-// how each weapon looks: beams are instant, tracers/projectiles travel (as a fraction of the turn animation)
+// how each weapon looks: beams are instant, tracers/projectiles travel (times in fractions of a game day)
 const SHOT_STYLE = {
   w1: { type: 'beam', travel: 0, show: 0.03 },
   w2: { type: 'tracer', travel: 0.015 },
@@ -123,7 +123,13 @@ export class View {
     this.floaters = [];
     this.lootGeo = new THREE.BoxGeometry(30, 30, 30);
     this.lootEqGeo = new THREE.OctahedronGeometry(26);
-    this.animKey = null;
+    this.snaps = [];            // snapshots streamed by the host: { T, ships: Map(id -> [id, sys, x, y, hd*100, hull, landed]) }
+    this.T = 0;                 // render time in substeps
+    this.clockOff = null;
+    this.subMs = DAY_MS / SUB;  // real ms per substep at the host's current speed
+    this.lastFight = new Map(); // ship id -> T of its last shot fired or taken
+    this.pickedLoot = new Set();
+    this.info = {};             // last known data of every drawn ship (outlives a wreck's removal)
     this.focusPending = true;
     addEventListener('resize', () => this.resize());
     this.resize();
@@ -178,6 +184,7 @@ export class View {
     for (const g of this.ships.values()) this._dropTrails(g);
     this._clearGroup(this.shipGroup);
     this.ships.clear(); this.loot.clear(); this.planets.clear();
+    this._clearFx();
     this.sysId = sys.id; this.sysOwner = sys.owner;
     this._clearGroup(this.nebulaGroup);
     this.nebulaGroup.add(buildNebulae(sys.id, sys.owner === 'dom'));
@@ -252,7 +259,7 @@ export class View {
     el.style.color = '#' + new THREE.Color(s.color).getHexString();
     const lo = new CSS2DObject(el); lo.position.set(0, 0, Math.max(60, model.radius + 15)); lo.center.set(0.5, 0);
     g.add(lo);
-    const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor, ANIM_MS / 1000 * 0.75));
+    const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor, DAY_MS / 1000 * 0.75));
     for (const tr of trails) this.trailGroup.add(tr.mesh);
     g.userData = { body, label: lo, el, heading: Math.random() * 6.28, fresh: true, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
     this.shipGroup.add(g);
@@ -279,66 +286,117 @@ export class View {
     return m;
   }
 
-  // A turn that arrives while the previous one is still playing waits in a queue,
-  // so fast-forwarded days chain seamlessly instead of cutting each other off.
-  startAnim(anim) {
+  // ---------------------------------------------------------------- real-time stream
+  // The host streams snapshots ({ T, ships }) every ~100 ms. We draw the world a little in the past
+  // (one snapshot interval plus a jitter buffer) and interpolate between the two snapshots around
+  // the render time `this.T` (in substeps). Events carry their own T and play when we reach it.
+
+  pushTick(m) {
     const now = performance.now();
-    if (anim && this.anim && now - this.animStart < ANIM_MS) {
-      (this.queue ||= []).push(anim);
-      if (this.queue.length > 2) this.queue.splice(0, this.queue.length - 2); // badly behind (hidden tab): skip ahead
-      return;
+    const last = this.snaps[this.snaps.length - 1];
+    if (last && m.T < last.T - SUB) { this.snaps = []; this.clockOff = null; this.T = m.T; } // the host restarted from an older save
+    if (!last || m.T > last.T || !this.snaps.length) { // (a snapshot for the same moment may already have come with the full state)
+      const ships = new Map();
+      for (const e of m.s) ships.set(e[0], e);
+      this.snaps.push({ T: m.T, ships });
+      if (this.snaps.length > 40) this.snaps.shift();
+      // map sim time onto our clock: network jitter is smoothed, pauses and speed changes resync
+      if (m.subMs && m.subMs !== this.subMs) { this.subMs = m.subMs; this.clockOff = null; }
+      const off = now - m.T * this.subMs;
+      if (this.clockOff == null || Math.abs(off - this.clockOff) > 300) this.clockOff = off;
+      else this.clockOff += (off - this.clockOff) * 0.05;
     }
-    this._beginAnim(anim, now);
+    const ev = m.ev;
+    if (!ev) return;
+    for (const sh of ev.shots) { this.lastFight.set(sh.a, sh.T); this.lastFight.set(sh.b, sh.T); if (sh.sys === this.sysId) this._addShot(sh); }
+    for (const b of ev.booms) if (b.sys === this.sysId) this._addBoom(b);
+    for (const pk of ev.pickups) if (pk.sys === this.sysId) this._addPickup(pk);
+    for (const j of ev.jumps) if (j.sys === this.sysId) this._addWarp(j);
   }
 
-  _beginAnim(anim, start) {
+  // render time: behind the newest snapshot by the buffer, never extrapolated, never backwards
+  _advanceClock(now, st) {
+    const last = this.snaps[this.snaps.length - 1];
+    if (!last) { this.T = st.day * SUB + (st.sub || 0); return; }
+    const delay = Math.max(this.subMs, 100) + 150;
+    let T = Math.min(last.T, (now - this.clockOff - delay) / this.subMs);
+    T = Math.max(T, this.snaps[0].T);
+    if (T < this.T && this.T - T < SUB) T = Math.min(this.T, last.T);
+    this.T = T;
+  }
+
+  // index of the last snapshot at or before T
+  _snapIdx(T) {
+    for (let i = this.snaps.length - 1; i >= 0; i--) if (this.snaps[i].T <= T) return i;
+    return 0;
+  }
+
+  _shipPos(id, i) {
+    const a = this.snaps[i], b = this.snaps[i + 1];
+    const ea = a && a.ships.get(id);
+    if (!ea) return null;
+    const eb = b && b.ships.get(id);
+    let x = ea[2], y = ea[3], hd = ea[4] != null ? ea[4] / 100 : null, moving = false;
+    if (eb && eb[1] === ea[1] && Math.hypot(eb[2] - ea[2], eb[3] - ea[3]) < 800) { // same system, not a jump
+      const u = Math.max(0, Math.min(1, (this.T - a.T) / (b.T - a.T)));
+      x += (eb[2] - ea[2]) * u; y += (eb[3] - ea[3]) * u;
+      if (hd != null && eb[4] != null) hd += wrapAngle(eb[4] / 100 - hd) * u;
+      moving = Math.hypot(eb[2] - ea[2], eb[3] - ea[3]) > 0.5;
+    }
+    return { sys: ea[1], x, y, hd, landed: !!ea[6], moving };
+  }
+
+  _clearFx() {
     for (const f of this.fx) this.fxGroup.remove(f.obj);
     this.fx = [];
-    this.anim = anim;
-    this.animStart = start;
-    this.dmg = {}; // target id -> [[hit time as anim fraction, damage]]
-    this.fighting = new Set(); // ships shooting or being shot this turn
-    for (const sh of anim ? anim.shots : []) { this.fighting.add(sh.a); this.fighting.add(sh.b); }
-    if (!anim) return;
-    for (const sh of anim.shots) {
-      if (sh.sys !== this.sysId) continue;
-      const W = D.byId(D.WEAPONS, sh.w), style = SHOT_STYLE[sh.w] || SHOT_STYLE.w1;
-      const hit = sh.k / SUB + style.travel;
-      (this.dmg[sh.b] ||= []).push([hit, sh.d]);
-      const col = new THREE.Color(W.color).multiplyScalar(3);
-      const fx = { kind: 'shot', sh, style, hit, W };
-      if (style.type === 'beam' || style.type === 'tracer') {
-        fx.obj = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-          new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending }));
-        fx.obj.frustumCulled = false;
-      } else {
-        fx.obj = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: col, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      }
-      fx.obj.visible = false;
-      fx.spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: W.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      fx.spark.visible = false;
-      this.fxGroup.add(fx.obj, fx.spark);
-      this.fx.push(fx, { obj: fx.spark, kind: 'none' });
+  }
+
+  _addShot(sh) {
+    const W = D.byId(D.WEAPONS, sh.w), style = SHOT_STYLE[sh.w] || SHOT_STYLE.w1;
+    const tt = sh.T / SUB, hit = tt + style.travel;
+    const col = new THREE.Color(W.color).multiplyScalar(3);
+    const fx = { kind: 'shot', sh, style, tt, hit, W, end: hit + 0.06 };
+    if (style.type === 'beam' || style.type === 'tracer') {
+      fx.obj = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+        new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending }));
+      fx.obj.frustumCulled = false;
+    } else {
+      fx.obj = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: col, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     }
-    for (const b of anim.booms) {
-      if (b.sys !== this.sysId) continue;
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      sp.position.set(b.x, 0, b.y); sp.visible = false;
-      this.fxGroup.add(sp);
-      this.fx.push({ obj: sp, kind: 'boom', b });
-    }
-    for (const pk of anim.pickups || []) {
-      if (pk.sys !== this.sysId) continue;
-      // the animated copy takes over from the container's own mesh
-      if (pk.all && this.loot.has(pk.id)) { this.shipGroup.remove(this.loot.get(pk.id)); this.loot.delete(pk.id); }
-      const box = this._lootMesh(pk.eq);
-      box.position.set(pk.x, 0, pk.y); box.visible = false;
-      const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-        new THREE.LineBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending }));
-      beam.frustumCulled = false; beam.visible = false;
-      this.fxGroup.add(box, beam);
-      this.fx.push({ obj: box, kind: 'pickup', pk, beam }, { obj: beam, kind: 'none' });
-    }
+    fx.obj.visible = false;
+    fx.spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: W.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    fx.spark.visible = false;
+    this.fxGroup.add(fx.obj, fx.spark);
+    this.fx.push(fx, { obj: fx.spark, kind: 'none', end: fx.end });
+  }
+
+  _addBoom(b) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sp.position.set(b.x, 0, b.y); sp.visible = false;
+    this.fxGroup.add(sp);
+    const len = 1000 / DAY_MS; // explosions last ~1 s at normal speed
+    this.fx.push({ obj: sp, kind: 'boom', b, tt: b.T / SUB, len, end: b.T / SUB + len });
+  }
+
+  _addPickup(pk) {
+    // the animated copy takes over from the container's own mesh
+    if (pk.all) { this.pickedLoot.add(pk.id); if (this.loot.has(pk.id)) { this.shipGroup.remove(this.loot.get(pk.id)); this.loot.delete(pk.id); } }
+    const box = this._lootMesh(pk.eq);
+    box.position.set(pk.x, 0, pk.y); box.visible = false;
+    const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending }));
+    beam.frustumCulled = false; beam.visible = false;
+    this.fxGroup.add(box, beam);
+    const tt = pk.T / SUB;
+    this.fx.push({ obj: box, kind: 'pickup', pk, beam, tt, end: tt + 0.25 }, { obj: beam, kind: 'none', end: tt + 0.25 });
+  }
+
+  // a ship leaving for hyperspace: a bright flash where it was
+  _addWarp(j) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0x9fd8ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sp.position.set(j.x, 0, j.y); sp.visible = false;
+    this.fxGroup.add(sp);
+    this.fx.push({ obj: sp, kind: 'warp', j, tt: j.T / SUB, end: j.T / SUB + 0.25 });
   }
 
   // floating text (damage numbers, picked-up cargo) that rises and fades in world space
@@ -355,33 +413,6 @@ export class View {
     this.floaters.push({ o, t0: performance.now(), life: big ? 1800 : 900 });
   }
 
-  // damage a ship has taken so far in the current animation (and in total)
-  _dmgUpTo(id, f) {
-    let sum = 0, all = 0;
-    for (const [t, d] of this.dmg[id] || []) { all += d; if (t <= f) sum += d; }
-    return [sum, all];
-  }
-
-  animFrac() { return this.anim ? Math.min(1, (performance.now() - this.animStart) / ANIM_MS) : 1; }
-
-  // Interpolated position of a ship during a turn animation.
-  _animPos(id, f) {
-    const fr = this.anim && this.anim.frames[id];
-    if (!fr || fr.sys !== this.sysId) return null;
-    const n = fr.p.length / 3;
-    const x = f * SUB, i = Math.floor(x);
-    if (fr.out) return { x: fr.p[0], y: fr.p[1], v: 1, a: Math.max(0, 1 - f * 2.5), dx: 0, dy: 0 };
-    if (i >= n - 1) {
-      const j = (n - 1) * 3;
-      const dead = n < SUB + 1;
-      return { x: fr.p[j], y: fr.p[j + 1], v: dead ? 0 : fr.p[j + 2], a: 1, dx: n > 1 ? fr.p[j] - fr.p[j - 3] : 0, dy: n > 1 ? fr.p[j + 1] - fr.p[j - 2] : 0 };
-    }
-    const u = x - i, j = i * 3;
-    // direction over a few substeps, so integer-rounded frames don't make the hull jitter
-    const ja = Math.max(0, i - 1) * 3, jb = Math.min(n - 1, i + 2) * 3;
-    return { x: fr.p[j] + (fr.p[j + 3] - fr.p[j]) * u, y: fr.p[j + 1] + (fr.p[j + 4] - fr.p[j + 1]) * u, v: fr.p[j + 5] && fr.p[j + 2], a: 1, dx: fr.p[jb] - fr.p[ja], dy: fr.p[jb + 1] - fr.p[ja + 1] };
-  }
-
   update(st, meId, selected) {
     this.meId = meId;
     const me = st.ships[meId];
@@ -390,19 +421,14 @@ export class View {
     if (this.sysId !== viewSys || this.sysOwner !== sys.owner) this.buildSystem(sys);
 
     const now = performance.now();
-    if (this.queue && this.queue.length && (!this.anim || now - this.animStart >= ANIM_MS)) {
-      // continue exactly where the previous day ended, unless we fell far behind
-      const end = this.anim ? this.animStart + ANIM_MS : now;
-      this._beginAnim(this.queue.shift(), now - end < ANIM_MS / 2 ? end : now);
-    }
-    const f = this.anim ? Math.min(1, (now - this.animStart) / ANIM_MS) : 1;
-    const animating = this.anim && f < 1;
-    // trails age on game time only: frozen while the world is paused or waiting for the next day
     const frameDt = this._lastFrame ? Math.min(100, now - this._lastFrame) : 0;
     this._lastFrame = now;
-    if (animating) this.trailClock = (this.trailClock || 0) + frameDt;
-    const trailNow = this.trailClock || 0;
-    const t = animating ? this.anim.day + f : st.day;
+    const prevT = this.T;
+    this._advanceClock(now, st);
+    const running = this.T > prevT; // world time is moving on screen (not paused, not waiting)
+    const t = this.T / SUB;         // days, for orbits and effects
+    const trailNow = this.T * (DAY_MS / SUB); // trails age on game time only: frozen during a pause
+    const si = this._snapIdx(this.T), hullSnap = this.snaps[this._snapIdx(this.T - 1)];
     const camDist = this.camera.position.distanceTo(this.controls.target);
     const sc = Math.max(1, camDist / 3800);
 
@@ -414,47 +440,40 @@ export class View {
     }
 
     // ships
+    for (const id in st.ships) this.info[id] = st.ships[id];
     const seen = new Set();
-    const ids = new Set(Object.keys(st.ships));
-    if (animating) for (const id in this.anim.frames) if (this.anim.frames[id].sys === this.sysId) ids.add(id);
-    for (const id of ids) {
-      const s = st.ships[id];
-      let pos = null;
-      if (animating) pos = this._animPos(id, f);
-      if (!pos) {
-        if (!s || s.sys !== this.sysId || s.jump || s.dead != null) continue;
-        const fresh = animating && !(this.anim.frames[id]);
-        pos = { x: s.x, y: s.y, v: s.landed ? 0 : 1, a: fresh ? Math.max(0, (f - 0.6) / 0.4) : 1, dx: 0, dy: 0 };
-      }
-      const info = s || (this._ghost && this._ghost[id]);
-      if (!info) continue;
+    const cur = this.snaps[si];
+    for (const id of cur ? cur.ships.keys() : []) {
+      const pos = this._shipPos(id, si);
+      const info = this.info[id];
+      if (!pos || pos.sys !== this.sysId || !info) continue;
       let g = this.ships.get(id);
       if (g && g.userData.hull !== info.eq.hull) { this._dropShip(id, g); g = null; } // hull upgraded
       g ||= this._makeShip(info);
       seen.add(id);
-      g.visible = !!pos.v && pos.a > 0.01;
-      g.userData.label.visible = g.visible;
+      const ud = g.userData;
+      const vis = !pos.landed;
+      if (vis && !g.visible) ud.shownAt = now; // take-off, arrival, spawn: fade in
+      g.visible = vis;
+      ud.label.visible = vis;
+      const alpha = vis ? Math.min(1, (now - (ud.shownAt || 0)) / 400) : 0;
       g.position.set(pos.x, 0, pos.y);
-      let want = null;
-      if (Math.abs(pos.dx) + Math.abs(pos.dy) > 1.5) want = Math.atan2(-pos.dy, pos.dx);
-      else if (!animating && s && s.hd != null && info.kind !== 'citadel') want = -s.hd; // keep the course the ship ended the turn with
-      if (want != null) { // turn smoothly towards the wanted course
-        if (g.userData.fresh) g.userData.heading = want;
-        else {
-          const d = Math.atan2(Math.sin(want - g.userData.heading), Math.cos(want - g.userData.heading));
-          g.userData.heading += d * (1 - Math.exp(-frameDt / 1000 * 7));
-        }
+      if (pos.hd != null && info.kind !== 'citadel') { // turn smoothly towards the simulated course
+        const want = -pos.hd;
+        if (ud.fresh) ud.heading = want;
+        else ud.heading += wrapAngle(want - ud.heading) * (1 - Math.exp(-frameDt / 1000 * 10));
       }
-      g.userData.fresh = false;
-      const body = g.userData.body;
-      body.rotation.y = info.kind === 'citadel' ? t * 0.8 : g.userData.heading;
+      ud.fresh = false;
+      const body = ud.body;
+      body.rotation.y = info.kind === 'citadel' ? t * 0.8 : ud.heading;
       if (info.kind !== 'citadel') {
         // bank into turns, and now and then throw a barrel roll in a dogfight
-        const ud = g.userData, dts = Math.max(0.001, frameDt / 1000);
+        const dts = Math.max(0.001, frameDt / 1000);
         const turnRate = wrapAngle(ud.heading - (ud.prevHead ?? ud.heading)) / dts;
         ud.prevHead = ud.heading;
         ud.bank = (ud.bank || 0) + (Math.max(-0.9, Math.min(0.9, -turnRate * 0.45)) - (ud.bank || 0)) * (1 - Math.exp(-dts * 5));
-        if (!ud.rollT && animating && this.fighting.has(id) && Math.random() < dts * 0.3) { ud.rollT = now; ud.rollDir = Math.random() < 0.5 ? 1 : -1; }
+        const fighting = this.T - (this.lastFight.get(id) ?? -1e9) < SUB;
+        if (!ud.rollT && running && fighting && Math.random() < dts * 0.3) { ud.rollT = now; ud.rollDir = Math.random() < 0.5 ? 1 : -1; }
         let roll = 0;
         if (ud.rollT) {
           const q = (now - ud.rollT) / 700;
@@ -465,62 +484,54 @@ export class View {
         body.rotation.x = ud.bank + roll;
       }
       body.scale.setScalar(sc);
-      for (const m of g.userData.mats) {
+      for (const m of ud.mats) {
         if (m.isSpriteMaterial) continue;
-        m.opacity = pos.a;
-        if (m.transparent !== pos.a < 1) { m.transparent = pos.a < 1; m.needsUpdate = true; }
+        m.opacity = alpha;
+        if (m.transparent !== alpha < 1) { m.transparent = alpha < 1; m.needsUpdate = true; }
       }
-      for (const e of g.userData.engines) {
-        e.material.opacity = 0.85 * pos.a;
+      for (const e of ud.engines) {
+        e.material.opacity = 0.85 * alpha;
         e.scale.setScalar(e.userData.base * (0.85 + Math.random() * 0.3));
       }
-      if (g.userData.trails.length) {
+      if (ud.trails.length) {
         g.updateMatrixWorld(true);
-        const emitting = g.visible && pos.a > 0.3;
-        g.userData.engines.forEach((e, i) => g.userData.trails[i].update(e.getWorldPosition(this._tmpV), trailNow, emitting && animating, e.userData.base * 0.4 * sc, pos.a));
+        const emitting = vis && alpha > 0.3 && pos.moving;
+        ud.engines.forEach((e, i) => ud.trails[i].update(e.getWorldPosition(this._tmpV), trailNow, emitting, e.userData.base * 0.4 * sc, alpha));
       }
+      // the hull bar lags a substep behind so it drops when the shot lands, not when it is fired
       const S = stats(info);
-      const hp = s ? s.hull : 0;
-      const el = g.userData.el;
+      const hs = hullSnap && hullSnap.ships.get(id);
+      const hp = hs ? hs[5] : cur.ships.get(id)[5];
+      const el = ud.el;
       el.querySelector('.n').textContent = info.name + (info.wanted > 0 ? ' ⚠' : '');
-      let shown = hp;
-      if (animating) { // drain the bar hit by hit instead of jumping at the end of the turn
-        const [sofar, all] = this._dmgUpTo(id, f);
-        shown = (s ? Math.min(S.maxHull, hp + all) : info.hull) - sofar;
-      }
-      el.querySelector('.hp i').style.width = Math.max(0, Math.min(100, shown / S.maxHull * 100)) + '%';
+      el.querySelector('.hp i').style.width = Math.max(0, Math.min(100, hp / S.maxHull * 100)) + '%';
       el.classList.toggle('me', id === meId);
       el.classList.toggle('sel', !!selected && selected.id === id);
     }
     for (const [id, g] of this.ships) if (!seen.has(id)) this._dropShip(id, g);
-    // keep info about ships that died this turn so they can still be drawn during the animation
-    if (!animating) this._ghost = {};
-    for (const id in st.ships) (this._ghost ||= {})[id] = st.ships[id];
+    for (const id in this.info) if (!st.ships[id] && !seen.has(id)) delete this.info[id];
 
-    // loot
+    // loot: new containers appear once the explosion that made them has played
     const lseen = new Set();
     for (const l of st.loot) {
-      if (l.sys !== this.sysId) continue;
+      if (l.sys !== this.sysId || this.pickedLoot.has(l.id) || (l.t0 != null && this.T < l.t0)) continue;
       let m = this.loot.get(l.id);
       if (m && m.userData.eq !== !!(l.items && l.items.length)) { this.shipGroup.remove(m); m = null; } // equipment taken, goods left
       m ||= this._makeLoot(l);
       lseen.add(l.id);
       m.position.set(l.x, 0, l.y);
       m.rotation.set(now / 700, now / 900, 0);
-      m.visible = !animating || f > 0.5 || !this._lootBefore || this._lootBefore.has(l.id);
+      m.visible = true;
       m.scale.setScalar(sc);
     }
-    // containers picked up in a turn that hasn't played yet stay visible until their pickup animation starts
-    const pending = new Set();
-    for (const q of this.queue || []) for (const pk of q.pickups || []) pending.add(pk.id);
-    for (const [id, m] of this.loot) if (!lseen.has(id) && !pending.has(id)) { this.shipGroup.remove(m); this.loot.delete(id); }
-    if (!animating) this._lootBefore = new Set(lseen);
+    for (const [id, m] of this.loot) if (!lseen.has(id)) { this.shipGroup.remove(m); this.loot.delete(id); }
+    for (const id of this.pickedLoot) if (!st.loot.some(l => l.id === id)) this.pickedLoot.delete(id);
 
     // effects
-    const nowF = this.anim ? (now - this.animStart) / ANIM_MS : 1;
+    const nowF = t;
     for (const fx of this.fx) {
       if (fx.kind === 'shot') {
-        const tt = fx.sh.k / SUB, sty = fx.style;
+        const tt = fx.tt, sty = fx.style;
         const a = this.ships.get(fx.sh.a), b = this.ships.get(fx.sh.b);
         if (!a || !b) { fx.obj.visible = fx.spark.visible = false; continue; }
         if (nowF >= tt && !fx.played) { fx.played = true; Audio.weapon(fx.sh.w, this._hearing(a.position)); }
@@ -542,17 +553,22 @@ export class View {
         if (fx.spark.visible) { fx.spark.position.copy(B); fx.spark.scale.setScalar(sc * (50 + fx.sh.d * 4) * (1 - h * 10)); }
         if (h >= 0 && !fx.numbered) { fx.numbered = true; this._floater('-' + fx.sh.d, B, fx.W.color); }
       } else if (fx.kind === 'boom') {
-        const el = nowF - fx.b.k / SUB, len = 1000 / ANIM_MS; // explosions last ~1 s whatever the day length
-        fx.obj.visible = el >= 0 && el < len;
+        const el = nowF - fx.tt;
+        fx.obj.visible = el >= 0 && el < fx.len;
         if (el >= 0 && !fx.played) { fx.played = true; Audio.explosion(fx.b.big, this._hearing(fx.obj.position)); }
         if (fx.obj.visible) {
-          const q = el / len;
+          const q = el / fx.len;
           fx.obj.scale.setScalar((150 + q * 550) * fx.b.big * sc);
           fx.obj.material.opacity = 1 - q;
         }
+      } else if (fx.kind === 'warp') {
+        const q = (nowF - fx.tt) / 0.25;
+        fx.obj.visible = q >= 0 && q < 1;
+        if (fx.obj.visible) { fx.obj.scale.setScalar(sc * (120 + 380 * Math.sqrt(q))); fx.obj.material.opacity = 1 - q; }
+        if (q >= 0 && !fx.played) { fx.played = true; if (fx.j.id !== this.meId) Audio.ui('jump', this._hearing(fx.obj.position) * 0.6); }
       } else if (fx.kind === 'pickup') {
         // the container waits, then a tractor beam pulls it into the ship
-        const tt = fx.pk.k / SUB, q = (nowF - tt) / 0.2;
+        const q = (nowF - fx.tt) / 0.2;
         const ship = this.ships.get(fx.pk.ship);
         const box = fx.obj;
         box.rotation.set(now / 700, now / 900, 0);
@@ -570,6 +586,10 @@ export class View {
         }
       }
     }
+    // drop finished effects
+    if (this.fx.some(f => nowF > f.end)) {
+      this.fx = this.fx.filter(f => { if (nowF <= f.end) return true; this.fxGroup.remove(f.obj); return false; });
+    }
     for (let i = this.floaters.length - 1; i >= 0; i--) {
       const fl = this.floaters[i], age = (now - fl.t0) / fl.life;
       if (age >= 1) { this.scene.remove(fl.o); this.floaters.splice(i, 1); continue; }
@@ -586,7 +606,7 @@ export class View {
       this.rangeRing.position.copy(mg.position);
       this.rangeRing.scale.setScalar(range);
       // planned route, simulated with the same navigation code the host uses
-      const key = me.order && JSON.stringify(me.order) + '|' + st.day + '|' + Math.round(me.x) + ',' + Math.round(me.y);
+      const key = me.order && JSON.stringify(me.order) + '|' + Math.round(me.x) + ',' + Math.round(me.y);
       if (key !== this._routeKey) { this._routeKey = key; this._route = me.order && me.order.type !== 'jump' ? predictPath(st, me, 20) : null; }
       const route = this._route;
       this.orderLine.visible = !!(route && route.length > 1);
@@ -628,7 +648,7 @@ export class View {
     this.controls.update();
     this.composer.render();
     this.labels.render(this.scene, this.camera);
-    return { animating, f };
+    return { T: this.T };
   }
 
   orderPoint(st, s, t) {

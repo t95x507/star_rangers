@@ -4,22 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Звёздные Рейнджеры P2P</title>
-<link rel="stylesheet" href="style.css?v=20260930d">
+<link rel="stylesheet" href="style.css?v=20261001a">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-  "./js/main.js": "./js/main.js?v=20260930d",
-  "./js/ui.js": "./js/ui.js?v=20260930d",
-  "./js/sim.js": "./js/sim.js?v=20260930d",
-  "./js/net.js": "./js/net.js?v=20260930d",
-  "./js/render.js": "./js/render.js?v=20260930d",
-  "./js/data.js": "./js/data.js?v=20260930d",
-  "./js/models.js": "./js/models.js?v=20260930d",
-  "./js/audio.js": "./js/audio.js?v=20260930d",
-  "./js/nebula.js": "./js/nebula.js?v=20260930d",
-  "./js/trails.js": "./js/trails.js?v=20260930d"
+  "./js/main.js": "./js/main.js?v=20261001a",
+  "./js/ui.js": "./js/ui.js?v=20261001a",
+  "./js/sim.js": "./js/sim.js?v=20261001a",
+  "./js/net.js": "./js/net.js?v=20261001a",
+  "./js/render.js": "./js/render.js?v=20261001a",
+  "./js/data.js": "./js/data.js?v=20261001a",
+  "./js/models.js": "./js/models.js?v=20261001a",
+  "./js/audio.js": "./js/audio.js?v=20261001a",
+  "./js/nebula.js": "./js/nebula.js?v=20261001a",
+  "./js/trails.js": "./js/trails.js?v=20261001a"
 } }
 </script>
 </head>
@@ -45,10 +45,8 @@
     <details>
       <summary>Как играть</summary>
       <ul>
-        <li><b>Один ход = один день.</b> Все игроки отдают приказы одновременно, потом день разыгрывается для всех сразу.</li>
-        <li><b>Время идёт само:</b> новый день наступает каждые 10 секунд (настраивает хост), даже если вы ещё ничего не приказали.</li>
-        <li><b>Пробел</b> включает/выключает ускорение. Когда ускорение включили <b>все</b> игроки, дни идут подряд без пауз. Если рядом враг — ускорение само выключается.</li>
-        <li>Когда <b>все</b> игроки сидят на планетах или стоят в космосе без приказа — время стоит на паузе, а ускорение у всех сбрасывается. Нажмите Пробел, чтобы пустить время (если нажмут все — дни полетят без задержек).</li>
+        <li><b>Игра идёт в реальном времени:</b> игровой день — 3 секунды (хост может замедлить или ускорить время). Приказы выполняются сразу.</li>
+        <li><b>Пробел</b> — попросить паузу. Время останавливается, когда паузу нажали <b>все</b> игроки. Нажмите ещё раз, чтобы снять свою.</li>
         <li>ЛКМ: по планете — сесть, по врагу — атаковать, по контейнеру — подобрать, по пустоте — лететь. ПКМ — двигать камеру, колесо — зум, СКМ — вращать.</li>
         <li><b>M</b> — карта галактики и гиперпрыжки, <b>I</b> — корабль и трюм, <b>P</b> — экран планеты, <b>F</b> — камеру к выделенному (или к своему кораблю), <b>Enter</b> — чат.</li>
         <li>На планете: рынок (покупай дёшево, продавай дорого), верфь, ремонт и топливо.</li>
@@ -64,10 +62,10 @@
     <div id="room"></div>
     <div id="players"></div>
     <div id="turnbox">
-      <button id="endturn">Конец хода</button>
+      <button id="endturn">⏸ Пауза [Пробел]</button>
       <div id="turninfo"></div>
-      <label class="chk host-only">Длина хода
-        <select id="timer"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="15">15 с</option><option value="20">20 с</option><option value="30">30 с</option><option value="60">60 с</option><option value="0">∞ только по ускорению</option></select>
+      <label class="chk host-only">Скорость
+        <select id="speed"><option value="0.5">×0.5 · 6 с/день</option><option value="1" selected>×1 · 3 с/день</option><option value="2">×2 · 1,5 с/день</option><option value="3">×3 · 1 с/день</option></select>
       </label>
       <button id="planetbtn">Планета [P]</button>
       <button id="shipbtn">Корабль и трюм [I]</button>
@@ -99,6 +97,6 @@
   <div id="toast"></div>
 </div>
 
-<script type="module" src="js/main.js?v=20260930d"></script>
+<script type="module" src="js/main.js?v=20261001a"></script>
 </body>
 </html>

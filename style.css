@@ -57,6 +57,7 @@ summary { cursor: pointer; color: var(--txt); }
 #players .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 #players .st { margin-left: auto; font-size: 11px; color: var(--dim); }
 #players .st.ok { color: var(--acc); }
+#players .st.warn { color: var(--warn); }
 #players .off { opacity: 0.4; }
 #turnbox { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 #endturn { font-size: 16px; padding: 10px; background: #0f4a2e; border-color: #2fae6a; }
