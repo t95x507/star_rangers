@@ -122,6 +122,7 @@ export class View {
     this.fx = [];
     this.floaters = [];
     this.lootGeo = new THREE.BoxGeometry(30, 30, 30);
+    this.lootEqGeo = new THREE.OctahedronGeometry(26);
     this.animKey = null;
     this.focusPending = true;
     addEventListener('resize', () => this.resize());
@@ -259,11 +260,20 @@ export class View {
     return g;
   }
 
+  // goods: a golden crate; equipment (weapons, modules): a cyan crystal, so valuable drops stand out
+  _lootMesh(eq) {
+    return eq
+      ? new THREE.Mesh(this.lootEqGeo, new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x1aa8ff, emissiveIntensity: 1.4, flatShading: true }))
+      : new THREE.Mesh(this.lootGeo, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa00, emissiveIntensity: 1.2 }));
+  }
+
   _makeLoot(l) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(30, 30, 30), new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa00, emissiveIntensity: 1.2 }));
+    const eq = !!(l.items && l.items.length);
+    const m = this._lootMesh(eq);
     const hit = new THREE.Mesh(new THREE.SphereGeometry(70, 8, 6), this.hitMat);
     hit.userData = { type: 'loot', id: l.id };
     m.add(hit);
+    m.userData.eq = eq;
     this.shipGroup.add(m);
     this.loot.set(l.id, m);
     return m;
@@ -321,7 +331,7 @@ export class View {
       if (pk.sys !== this.sysId) continue;
       // the animated copy takes over from the container's own mesh
       if (pk.all && this.loot.has(pk.id)) { this.shipGroup.remove(this.loot.get(pk.id)); this.loot.delete(pk.id); }
-      const box = new THREE.Mesh(this.lootGeo, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa00, emissiveIntensity: 1.2 }));
+      const box = this._lootMesh(pk.eq);
       box.position.set(pk.x, 0, pk.y); box.visible = false;
       const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
         new THREE.LineBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending }));
@@ -491,7 +501,9 @@ export class View {
     const lseen = new Set();
     for (const l of st.loot) {
       if (l.sys !== this.sysId) continue;
-      const m = this.loot.get(l.id) || this._makeLoot(l);
+      let m = this.loot.get(l.id);
+      if (m && m.userData.eq !== !!(l.items && l.items.length)) { this.shipGroup.remove(m); m = null; } // equipment taken, goods left
+      m ||= this._makeLoot(l);
       lseen.add(l.id);
       m.position.set(l.x, 0, l.y);
       m.rotation.set(now / 700, now / 900, 0);

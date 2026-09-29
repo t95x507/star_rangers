@@ -26,7 +26,11 @@ export function stats(s) {
     speed: eng.speed * (s.spdMul ?? 1), jumpRange: eng.jump, maxFuel: tank.fuel, repair: droid ? droid.rep : 0,
   };
 }
-export const cargoUsed = s => Object.values(s.cargo).reduce((a, b) => a + b, 0);
+// Uninstalled equipment lies in the hold as items { u: unique id, id: equipment id } and takes cargo space.
+export const itemSize = id => { const d = D.itemDef(id); return d ? d.def.size : 0; };
+export const itemsUsed = s => (s.items || []).reduce((a, it) => a + itemSize(it.id), 0);
+export const cargoUsed = s => Object.values(s.cargo).reduce((a, b) => a + b, 0) + itemsUsed(s);
+const newItem = (st, id) => ({ u: 'i' + (st.nextId++), id });
 export const sysDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 export const jumpCost = d => Math.ceil(d);
 export const jumpDays = d => Math.max(1, Math.ceil(d / 9));
@@ -137,7 +141,7 @@ function makeShip(st, kind, sys, x, y, o = {}) {
   const s = {
     id, kind, name: o.name || D.KIND_NAMES[kind], sys, x, y,
     eq: o.eq || { hull: 'h1', engine: 'e1', tank: 't1', droid: null }, weapons: o.weapons || [],
-    cargo: o.cargo || {}, credits: o.credits || 0, fuel: 0, hull: 0,
+    cargo: o.cargo || {}, items: o.items || [], credits: o.credits || 0, fuel: 0, hull: 0,
     order: null, landed: null, jump: null, ai: {}, aggro: {}, wanted: 0,
     color: o.color || D.KIND_COLORS[kind] || 0xffffff, hpMul: o.hpMul || 1, spdMul: o.spdMul ?? 1, kills: 0,
   };
@@ -152,6 +156,12 @@ function randCargo(n, amt) {
   const c = {};
   for (let i = 0; i < n; i++) { const g = pick(D.GOODS).id; c[g] = (c[g] || 0) + rint(amt[0], amt[1]); }
   return c;
+}
+// a random piece of equipment up to the given tier (never the worthless starter engine/tank)
+function randomItemId(maxTier) {
+  const list = pick([D.WEAPONS, D.WEAPONS, D.ENGINES, D.TANKS, D.DROIDS]);
+  const t = rint(Math.max(0, maxTier - 2), maxTier);
+  return list[Math.max(t, list[0].price ? 0 : 1)].id;
 }
 function edgePos() { const a = rnd(0, Math.PI * 2); return [Math.cos(a) * ARRIVE_R, Math.sin(a) * ARRIVE_R]; }
 
@@ -174,7 +184,8 @@ function spawnPirate(st, sys) {
   const t = Math.min(4, tierNow(st) + (R() < 0.25 ? 1 : 0));
   const w = [];
   for (let i = 0; i < 1 + Math.floor(t / 2); i++) w.push(D.WEAPONS[rint(Math.max(0, t - 1), t)].id);
-  return makeShip(st, 'pirate', sys.id, x, y, { name: pick(D.PIRATE_NAMES), eq: eqT(t, Math.min(3, t)), weapons: w, hpMul: 0.7, credits: rint(300, 1200) + t * 500, cargo: randCargo(1, [5, 20]) });
+  const items = R() < 0.25 ? [newItem(st, randomItemId(Math.min(4, t + 1)))] : []; // plunder from earlier raids
+  return makeShip(st, 'pirate', sys.id, x, y, { name: pick(D.PIRATE_NAMES), eq: eqT(t, Math.min(3, t)), weapons: w, hpMul: 0.7, credits: rint(300, 1200) + t * 500, cargo: randCargo(1, [5, 20]), items });
 }
 function spawnDom(st, sys, x, y) {
   const t = Math.min(4, 1 + Math.floor(tierNow(st) / 1.5));
@@ -219,22 +230,71 @@ export function setOrder(st, pid, o) {
   s.order = o;
 }
 
+const itemName = id => D.itemDef(id).def.name;
+
+// Install an item from the hold. Whatever it replaces goes back into the hold (if it fits).
+function equipItem(st, s, a, say) {
+  const i = s.items.findIndex(it => it.u === a.u);
+  const d = i >= 0 && D.itemDef(s.items[i].id);
+  if (!d) return;
+  const S = stats(s), room = S.cargoCap - cargoUsed(s) + d.def.size; // free space once the item leaves the hold
+  let old = null;
+  if (d.kind === 'weapon') {
+    const want = Number.isInteger(a.idx) ? a.idx : -1;
+    const slot = want >= 0 && want < s.weapons.length ? want : s.weapons.length < S.slots ? s.weapons.length : -1;
+    if (slot < 0) return say('Все оружейные слоты заняты — перетащите оружие на слот, чтобы заменить');
+    old = s.weapons[slot] || null;
+    if (old && itemSize(old) > room) return say('Нет места в трюме для снятого: ' + itemName(old));
+    s.weapons[slot] = s.items[i].id;
+  } else {
+    old = s.eq[d.kind] || null;
+    if (old && itemSize(old) > room) return say('Нет места в трюме для снятого: ' + itemName(old));
+    s.eq[d.kind] = s.items[i].id;
+    if (d.kind === 'tank') s.fuel = Math.min(s.fuel, d.def.fuel);
+  }
+  s.items.splice(i, 1);
+  if (old) s.items.push(newItem(st, old));
+  say('Установлено: ' + d.def.name + (old ? ' (' + itemName(old) + ' — в трюм)' : ''));
+}
+
+function unequipItem(st, s, a, say) {
+  if (a.slot !== 'weapon' && a.slot !== 'droid') return say('Двигатель и бак нельзя снять — только заменить другим');
+  const id = a.slot === 'weapon' ? (Number.isInteger(a.idx) ? s.weapons[a.idx] : null) : s.eq.droid;
+  if (!id) return;
+  if (itemSize(id) > stats(s).cargoCap - cargoUsed(s)) return say('Нет места в трюме для ' + itemName(id));
+  if (a.slot === 'weapon') s.weapons.splice(a.idx, 1); else s.eq.droid = null;
+  s.items.push(newItem(st, id));
+  say('Снято в трюм: ' + itemName(id));
+}
+
 export function act(st, pid, a) {
   const s = st.ships[pid];
   if (!s) return;
-  if (a.type === 'drop') {
-    const q = Math.min(a.qty, s.cargo[a.good] || 0);
-    if (q <= 0 || s.jump || s.sys == null) return;
-    s.cargo[a.good] -= q;
-    if (!s.cargo[a.good]) delete s.cargo[a.good];
-    if (!s.landed) st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: { [a.good]: q }, ttl: 20 });
-    log(st, 'Выброшено за борт: ' + q + ' ' + D.byId(D.GOODS, a.good).name, pid);
-    return;
+  const say = t => log(st, t, pid);
+  s.items ||= [];
+  // things you can do anywhere: jettison, swap equipment
+  switch (a.type) {
+    case 'drop': {
+      const q = Math.min(a.qty, s.cargo[a.good] || 0);
+      if (q <= 0 || s.jump || s.sys == null) return;
+      s.cargo[a.good] -= q;
+      if (!s.cargo[a.good]) delete s.cargo[a.good];
+      if (!s.landed) st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: { [a.good]: q }, items: [], ttl: 20 });
+      return say('Выброшено за борт: ' + q + ' ' + D.byId(D.GOODS, a.good).name);
+    }
+    case 'dropItem': {
+      const i = s.items.findIndex(it => it.u === a.u);
+      if (i < 0 || s.jump || s.sys == null || s.landed) return;
+      const [it] = s.items.splice(i, 1);
+      st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x + rnd(-40, 40), y: s.y + rnd(-40, 40), credits: 0, cargo: {}, items: [it], ttl: 30 });
+      return say('Выброшено за борт: ' + itemName(it.id));
+    }
+    case 'equip': return equipItem(st, s, a, say);
+    case 'unequip': return unequipItem(st, s, a, say);
   }
   if (!s.landed) return;
   const p = findPlanet(st, s.landed);
   const S = stats(s);
-  const say = t => log(st, t, pid);
   switch (a.type) {
     case 'buy': {
       const price = p.prices[a.good];
@@ -276,7 +336,7 @@ export function act(st, pid, a) {
       if (s.credits < cost) return say('Недостаточно кредитов');
       if (a.slot === 'hull') {
         if (cargoUsed(s) > item.cargo) return say('Груз не поместится в новый корпус');
-        if (s.weapons.length > item.slots) return say('Сначала продайте лишнее оружие');
+        if (s.weapons.length > item.slots) return say('Сначала снимите или продайте лишнее оружие');
       }
       const oldMax = S.maxHull;
       s.credits -= cost;
@@ -290,16 +350,27 @@ export function act(st, pid, a) {
       const tier = D.tierOf(D.WEAPONS, a.id);
       if (tier < 0 || tier > p.tech) return;
       const w = D.WEAPONS[tier];
-      if (s.weapons.length >= S.slots) return say('Нет свободных оружейных слотов');
       if (s.credits < w.price) return say('Недостаточно кредитов');
-      s.credits -= w.price; s.weapons.push(w.id);
+      if (s.weapons.length < S.slots) s.weapons.push(w.id);
+      else if (w.size <= S.cargoCap - cargoUsed(s)) { s.items.push(newItem(st, w.id)); say(w.name + ' — в трюм: все оружейные слоты заняты'); }
+      else return say('Нет свободных оружейных слотов и места в трюме');
+      s.credits -= w.price;
       break;
     }
     case 'sellW': {
       const id = s.weapons[a.idx];
       if (!id) return;
       s.weapons.splice(a.idx, 1);
-      s.credits += Math.floor(D.byId(D.WEAPONS, id).price * 0.5);
+      s.credits += D.itemSell(id);
+      say('Продано: ' + itemName(id) + ' за ' + D.itemSell(id) + ' кр.');
+      break;
+    }
+    case 'sellItem': {
+      const i = s.items.findIndex(it => it.u === a.u);
+      if (i < 0) return;
+      const [it] = s.items.splice(i, 1);
+      s.credits += D.itemSell(it.id);
+      say(D.itemSell(it.id) ? 'Продано: ' + itemName(it.id) + ' за ' + D.itemSell(it.id) + ' кр.' : 'Сдано в утиль: ' + itemName(it.id));
       break;
     }
     case 'takeoff': {
@@ -513,11 +584,25 @@ export function predictPath(st, ship, days = 3) {
 // ---------------------------------------------------------------- turn resolution
 
 function dropLoot(st, s) {
+  const player = s.kind === 'player';
   const cargo = {};
-  for (const g in s.cargo) { const q = Math.floor(s.cargo[g] * (s.kind === 'player' ? 0.7 : 1)); if (q > 0) cargo[g] = q; }
-  const credits = Math.floor(s.credits * (s.kind === 'player' ? 0.15 : 0.6));
-  if (!credits && !Object.keys(cargo).length) return;
-  st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x, y: s.y, credits, cargo, ttl: 20 });
+  for (const g in s.cargo) { const q = Math.floor(s.cargo[g] * (player ? 0.7 : 1)); if (q > 0) cargo[g] = q; }
+  const credits = Math.floor(s.credits * (player ? 0.15 : 0.6));
+  // equipment: a player's wreck spills part of the hold (the installed kit survives in the escape pod);
+  // NPCs sometimes leave their installed guns and modules intact, a citadel always does
+  const items = [];
+  if (player) { for (const it of s.items || []) if (R() < 0.7) items.push(it); }
+  else {
+    const boss = s.kind === 'citadel';
+    for (const w of s.weapons) if (boss || R() < 0.3) items.push(newItem(st, w));
+    for (const slot of ['engine', 'tank', 'droid']) {
+      const id = s.eq[slot];
+      if (id && D.itemDef(id).def.price > 0 && (boss || R() < 0.12)) items.push(newItem(st, id));
+    }
+    items.push(...(s.items || []));
+  }
+  if (!credits && !Object.keys(cargo).length && !items.length) return;
+  st.loot.push({ id: 'l' + (st.nextId++), sys: s.sys, x: s.x, y: s.y, credits, cargo, items, ttl: items.length ? 30 : 20 });
 }
 
 function destroy(st, s, k, killer, anim) {
@@ -549,7 +634,7 @@ function respawn(st, s) {
   const p = pick(sys.planets);
   const [x, y] = planetPos(p, st.day);
   const S = stats(s);
-  Object.assign(s, { dead: undefined, sys: sys.id, x, y, landed: p.id, order: null, jump: null, hull: S.maxHull, fuel: S.maxFuel, cargo: {}, credits: Math.floor(s.credits * 0.75), wanted: 0, aggro: {} });
+  Object.assign(s, { dead: undefined, sys: sys.id, x, y, landed: p.id, order: null, jump: null, hull: S.maxHull, fuel: S.maxFuel, cargo: {}, items: [], credits: Math.floor(s.credits * 0.75), wanted: 0, aggro: {} });
   log(st, 'Спасательная капсула доставила вас на ' + p.name + ' (' + sys.name + '). Груз потерян.', s.id);
 }
 
@@ -623,18 +708,29 @@ export function resolveTurn(st) {
       for (const l of st.loot) {
         if (l.id !== s.order.id || l.taken || dist(l.x, l.y, s.x, s.y) > 70) continue;
         const cap = stats(s).cargoCap;
-        let got = [];
+        const got = [], left = [];
+        let gotEq = false;
         if (l.credits) { s.credits += l.credits; got.push(l.credits + ' кр.'); l.credits = 0; }
+        // equipment first (worth more per unit of space), then goods into whatever room is left
+        const li = l.items ||= [];
+        for (let j = 0; j < li.length; j++) {
+          if (itemSize(li[j].id) > cap - cargoUsed(s)) { left.push(itemName(li[j].id)); continue; }
+          (s.items ||= []).push(li[j]);
+          got.push(itemName(li[j].id)); gotEq = true;
+          li.splice(j--, 1);
+        }
         for (const g in l.cargo) {
           const q = Math.min(l.cargo[g], cap - cargoUsed(s));
           if (q > 0) { s.cargo[g] = (s.cargo[g] || 0) + q; l.cargo[g] -= q; got.push(q + ' ' + D.byId(D.GOODS, g).name); }
           if (!l.cargo[g]) delete l.cargo[g];
+          else left.push(l.cargo[g] + ' ' + D.byId(D.GOODS, g).name);
         }
-        if (!Object.keys(l.cargo).length) l.taken = true;
+        if (!Object.keys(l.cargo).length && !li.length) l.taken = true;
         if (got.length) {
           log(st, 'Подобрано: ' + got.join(', '), s.id);
-          anim.pickups.push({ sys: s.sys, id: l.id, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken });
-        } else log(st, 'Трюм полон — нечего подобрать', s.id);
+          anim.pickups.push({ sys: s.sys, id: l.id, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken, eq: gotEq });
+        }
+        if (left.length) log(st, 'Не хватает места в трюме: ' + left.join(', '), s.id);
         s.order = null;
         break;
       }
