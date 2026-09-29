@@ -236,7 +236,7 @@ export class View {
     g.add(lo);
     const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor));
     for (const tr of trails) this.trailGroup.add(tr.mesh);
-    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
+    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, fresh: true, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
     this.shipGroup.add(g);
     this.ships.set(s.id, g);
     return g;
@@ -306,7 +306,9 @@ export class View {
       return { x: fr.p[j], y: fr.p[j + 1], v: dead ? 0 : fr.p[j + 2], a: 1, dx: n > 1 ? fr.p[j] - fr.p[j - 3] : 0, dy: n > 1 ? fr.p[j + 1] - fr.p[j - 2] : 0 };
     }
     const u = x - i, j = i * 3;
-    return { x: fr.p[j] + (fr.p[j + 3] - fr.p[j]) * u, y: fr.p[j + 1] + (fr.p[j + 4] - fr.p[j + 1]) * u, v: fr.p[j + 5] && fr.p[j + 2], a: 1, dx: fr.p[j + 3] - fr.p[j], dy: fr.p[j + 4] - fr.p[j + 1] };
+    // direction over a few substeps, so integer-rounded frames don't make the hull jitter
+    const ja = Math.max(0, i - 1) * 3, jb = Math.min(n - 1, i + 2) * 3;
+    return { x: fr.p[j] + (fr.p[j + 3] - fr.p[j]) * u, y: fr.p[j + 1] + (fr.p[j + 4] - fr.p[j + 1]) * u, v: fr.p[j + 5] && fr.p[j + 2], a: 1, dx: fr.p[jb] - fr.p[ja], dy: fr.p[jb + 1] - fr.p[ja + 1] };
   }
 
   update(st, meId, selected) {
@@ -361,11 +363,20 @@ export class View {
       g.visible = !!pos.v && pos.a > 0.01;
       g.userData.label.visible = g.visible;
       g.position.set(pos.x, 0, pos.y);
-      if (Math.abs(pos.dx) + Math.abs(pos.dy) > 0.5) g.userData.heading = Math.atan2(-pos.dy, pos.dx);
+      let want = null;
+      if (Math.abs(pos.dx) + Math.abs(pos.dy) > 1.5) want = Math.atan2(-pos.dy, pos.dx);
       else if (!animating && s && s.order && info.kind !== 'citadel') {
         const tp = this.orderPoint(st, s, t);
-        if (tp && Math.hypot(tp[0] - s.x, tp[1] - s.y) > 5) g.userData.heading = Math.atan2(-(tp[1] - s.y), tp[0] - s.x);
+        if (tp && Math.hypot(tp[0] - s.x, tp[1] - s.y) > 5) want = Math.atan2(-(tp[1] - s.y), tp[0] - s.x);
       }
+      if (want != null) { // turn smoothly towards the wanted course
+        if (g.userData.fresh) g.userData.heading = want;
+        else {
+          const d = Math.atan2(Math.sin(want - g.userData.heading), Math.cos(want - g.userData.heading));
+          g.userData.heading += d * (1 - Math.exp(-frameDt / 1000 * 7));
+        }
+      }
+      g.userData.fresh = false;
       const body = g.userData.body;
       body.rotation.y = info.kind === 'citadel' ? t * 0.8 : g.userData.heading;
       body.scale.setScalar(sc);
