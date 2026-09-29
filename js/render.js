@@ -315,6 +315,8 @@ export class View {
     }
     for (const pk of anim.pickups || []) {
       if (pk.sys !== this.sysId) continue;
+      // the animated copy takes over from the container's own mesh
+      if (pk.all && this.loot.has(pk.id)) { this.shipGroup.remove(this.loot.get(pk.id)); this.loot.delete(pk.id); }
       const box = new THREE.Mesh(this.lootGeo, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa00, emissiveIntensity: 1.2 }));
       box.position.set(pk.x, 0, pk.y); box.visible = false;
       const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
@@ -367,6 +369,7 @@ export class View {
   }
 
   update(st, meId, selected) {
+    this.meId = meId;
     const me = st.ships[meId];
     const viewSys = me ? (me.jump ? me.jump.to : me.sys) : 0;
     const sys = st.systems[viewSys];
@@ -478,7 +481,10 @@ export class View {
       m.visible = !animating || f > 0.5 || !this._lootBefore || this._lootBefore.has(l.id);
       m.scale.setScalar(sc);
     }
-    for (const [id, m] of this.loot) if (!lseen.has(id)) { this.shipGroup.remove(m); this.loot.delete(id); }
+    // containers picked up in a turn that hasn't played yet stay visible until their pickup animation starts
+    const pending = new Set();
+    for (const q of this.queue || []) for (const pk of q.pickups || []) pending.add(pk.id);
+    for (const [id, m] of this.loot) if (!lseen.has(id) && !pending.has(id)) { this.shipGroup.remove(m); this.loot.delete(id); }
     if (!animating) this._lootBefore = new Set(lseen);
 
     // effects
@@ -531,7 +537,7 @@ export class View {
           fx.beam.geometry.setFromPoints([ship.position.clone().setY(3), box.position.clone().setY(3)]);
         } else {
           box.visible = fx.beam.visible = false;
-          if (!fx.done && ship) { fx.done = true; this._floater(fx.pk.text, ship.position, '#ffd66b', true); }
+          if (!fx.done && ship) { fx.done = true; this._floater(fx.pk.text, ship.position, '#ffd66b', true); Audio.ui('pickup', fx.pk.ship === this.meId ? 1 : this._hearing(ship.position)); }
         }
       }
     }

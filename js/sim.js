@@ -616,7 +616,7 @@ export function resolveTurn(st) {
         if (!Object.keys(l.cargo).length) l.taken = true;
         if (got.length) {
           log(st, 'Подобрано: ' + got.join(', '), s.id);
-          anim.pickups.push({ sys: s.sys, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken });
+          anim.pickups.push({ sys: s.sys, id: l.id, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken });
         } else log(st, 'Трюм полон — нечего подобрать', s.id);
         s.order = null;
         break;

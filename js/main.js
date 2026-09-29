@@ -301,7 +301,7 @@ function applyState(m) {
 // play a cue for fresh log lines addressed to us (or important global news)
 const LOG_SOUNDS = [
   [/ПОБЕДА|освобождена/, 'victory'], [/захвачена|Галактика пала/, 'bad'], [/⚠/, 'alert'],
-  [/Подобрано/, 'pickup'], [/Награда/, 'coin'], [/Установлено/, 'buyEq'],
+  [/Награда/, 'coin'], [/Установлено/, 'buyEq'],
   [/Недостаточно|Нет денег|не поместится|Нет свободных|Сначала продайте|отказала|невозможна|Не хватает|Слишком далеко/, 'error'],
 ];
 function logSounds() {
