@@ -136,7 +136,8 @@ const THEME_BARS = 14;
 
 // battle: 132 bpm, A minor, four-on-the-floor with driving bass
 const BPM = 132, STEP = 60 / BPM / 4; // 16th note
-const BATTLE_PROG = [[45, 57, 60, 64], [41, 53, 57, 60], [43, 55, 59, 62], [40, 52, 55, 59], [45, 57, 60, 64], [48, 55, 60, 64], [43, 55, 59, 62], [44, 56, 59, 64]];
+// Am F G Em | Am F Dm Em — stays minor, the last bar leans back into Am instead of lifting to E major
+const BATTLE_PROG = [[45, 57, 60, 64], [41, 53, 57, 60], [43, 55, 59, 62], [40, 52, 55, 59], [45, 57, 60, 64], [41, 53, 57, 60], [38, 50, 53, 57], [40, 52, 55, 59]];
 const BASS_PAT = [1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1];
 const LEAD_PAT = [0, -1, 2, -1, 1, -1, 3, 2, 0, -1, 2, -1, 3, -1, 1, -1];
 
@@ -284,7 +285,15 @@ function battleStep(t, i) {
   if (s % 4 === 0) kick(t);
   if (s === 4 || s === 12) snare(t);
   if (s % 2 === 0) hat(t, s % 8 === 6);
-  if (BASS_PAT[s]) bassNote(chord[0] - (s === 15 ? -7 : 0), t);
+  if (BASS_PAT[s]) {
+    let n = chord[0];
+    if (s === 15) { // pickup: step to the next chord's root by the shortest way, never a leap up
+      n = BATTLE_PROG[(Math.floor(i / 16) + 1) % BATTLE_PROG.length][0];
+      while (n - chord[0] > 5) n -= 12;
+      while (chord[0] - n > 7) n += 12;
+    }
+    bassNote(n, t);
+  }
   if (s === 2 || s === 10 || (s === 7 && phrase)) stab(chord, t);
   if (phrase && LEAD_PAT[s] >= 0) lead(chord[1 + LEAD_PAT[s] % (chord.length - 1)] + 12, t);
 }
