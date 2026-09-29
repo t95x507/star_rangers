@@ -463,7 +463,8 @@ function aiThink(st, s) {
 // to meet them, and fly around the star along tangents (planets are not obstacles).
 
 const TURN = 0.45;       // max heading change per substep, radians
-const SUN_PAD = 260;     // keep-out margin around the star
+const SUN_PAD = 260;     // keep-out margin around the star when just passing by
+const SUN_NEAR = 40;     // how close to the star's surface a direct order can take a player
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 function obstaclesAt(st, sysId) {
@@ -535,12 +536,21 @@ export function stepShip(st, s, t, predicting = false) {
       const rx = (s.x - tx) / (d || 1), ry = (s.y - ty) / (d || 1);
       const k = Math.max(-1, Math.min(1, (d - stop) / stop)) * 1.6; // pull in if too far, push out if too close
       let mx = -ry * s.ai.orbit - rx * k, my = rx * s.ai.orbit - ry * k;
+      // circling right by the star: never dive into it
+      const sr = st.systems[s.sys].star.size + SUN_NEAR, cd = Math.hypot(s.x, s.y);
+      if (cd < sr + 60) { const nx = s.x / (cd || 1), ny = s.y / (cd || 1), inward = mx * nx + my * ny; if (inward < 0) { mx -= inward * nx; my -= inward * ny; } }
       const ml = Math.hypot(mx, my) || 1;
       return fly(s, Math.atan2(my / ml, mx / ml), step * 0.8);
     }
   }
-  const sun = obs[0], gd = Math.hypot(tx, ty);
-  if (gd < sun.r) { const k = sun.r / (gd || 1); tx = gd ? tx * k : sun.r; ty *= k; } // goal inside the star: stop at its edge
+  const sun = obs[0];
+  let gd = Math.hypot(tx, ty);
+  // a player sent right next to the star on purpose: only the star's body is in the way then
+  if (s.kind === 'player' && gd < sun.r) sun.r = st.systems[s.sys].star.size + SUN_NEAR;
+  if (gd < sun.r) { // goal inside the star: stop at its edge, on the goal's side (facing the ship if it's the very centre)
+    if (gd < sun.r * 0.3) { tx = s.x; ty = s.y; gd = Math.hypot(tx, ty) || 1; }
+    tx *= sun.r / gd; ty *= sun.r / gd;
+  }
   if (o.type !== 'land') {
     const d = dist(s.x, s.y, tx, ty);
     if (d - stop <= step) {
