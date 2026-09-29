@@ -437,7 +437,7 @@ function steer(sx, sy, tx, ty, obs) {
 
 // Advances one ship by one substep along its order. Mutates x, y and heading `hd`.
 // Returns null while travelling, { cancel } if the order became invalid, { arrived, tx, ty } on arrival.
-export function stepShip(st, s, t) {
+export function stepShip(st, s, t, predicting = false) {
   const o = s.order;
   const speed = stats(s).speed, step = speed / SUB;
   let tx, ty, stop = 0;
@@ -459,6 +459,19 @@ export function stepShip(st, s, t) {
     tx = l.x; ty = l.y;
   } else return { cancel: true };
   const obs = obstaclesAt(st, s.sys);
+  // dogfight: once in weapons range, circle-strafe around the target instead of parking next to it
+  if (o.type === 'attack') {
+    const d = dist(s.x, s.y, tx, ty);
+    if (d <= stop * 1.6) {
+      if (predicting) return { arrived: true, tx, ty };
+      if (!s.ai.orbit || R() < 0.025) s.ai.orbit = s.ai.orbit ? -s.ai.orbit : (R() < 0.5 ? 1 : -1); // sometimes break the other way
+      const rx = (s.x - tx) / (d || 1), ry = (s.y - ty) / (d || 1);
+      const k = Math.max(-1, Math.min(1, (d - stop) / stop)) * 1.6; // pull in if too far, push out if too close
+      let mx = -ry * s.ai.orbit - rx * k, my = rx * s.ai.orbit - ry * k;
+      const ml = Math.hypot(mx, my) || 1;
+      return fly(s, Math.atan2(my / ml, mx / ml), step * 0.8);
+    }
+  }
   const sun = obs[0], gd = Math.hypot(tx, ty);
   if (gd < sun.r) { const k = sun.r / (gd || 1); tx = gd ? tx * k : sun.r; ty *= k; } // goal inside the star: stop at its edge
   if (o.type !== 'land') {
@@ -469,10 +482,14 @@ export function stepShip(st, s, t) {
     }
   }
   const [dx, dy] = steer(s.x, s.y, tx, ty, obs);
-  const want = Math.atan2(dy, dx);
+  return fly(s, Math.atan2(dy, dx), step);
+}
+
+// turn towards `want` at a limited rate and move, braking in hard turns
+function fly(s, want, step) {
   if (s.hd == null) s.hd = want;
   s.hd = wrapA(s.hd + Math.max(-TURN, Math.min(TURN, wrapA(want - s.hd))));
-  const f = Math.max(0.35, Math.cos(wrapA(want - s.hd))); // brake in hard turns
+  const f = Math.max(0.35, Math.cos(wrapA(want - s.hd)));
   s.x += Math.cos(s.hd) * step * f;
   s.y += Math.sin(s.hd) * step * f;
   return null;
@@ -483,9 +500,9 @@ export function predictPath(st, ship, days = 3) {
   const pts = [[ship.x, ship.y]];
   if (!ship.order || ship.jump || ship.sys == null || ship.order.type === 'jump') return pts;
   if (ship.landed && ship.order.type === 'land' && ship.order.planet === ship.landed) return pts;
-  const s = { ...ship, landed: null, order: { ...ship.order } };
+  const s = { ...ship, landed: null, order: { ...ship.order }, ai: { ...ship.ai } };
   for (let k = 1; k <= days * SUB; k++) {
-    const r = stepShip(st, s, st.day + k / SUB);
+    const r = stepShip(st, s, st.day + k / SUB, true);
     if (r && r.cancel) break;
     pts.push(r && r.tx != null && ship.order.type === 'land' ? [r.tx, r.ty] : [s.x, s.y]);
     if (r) break;

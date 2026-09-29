@@ -55,6 +55,8 @@ const SHOT_STYLE = {
   w5: { type: 'beam', travel: 0, show: 0.07 },
 };
 
+const wrapAngle = a => Math.atan2(Math.sin(a), Math.cos(a));
+
 export class View {
   constructor(container) {
     this.container = container;
@@ -285,6 +287,8 @@ export class View {
     this.anim = anim;
     this.animStart = start;
     this.dmg = {}; // target id -> [[hit time as anim fraction, damage]]
+    this.fighting = new Set(); // ships shooting or being shot this turn
+    for (const sh of anim ? anim.shots : []) { this.fighting.add(sh.a); this.fighting.add(sh.b); }
     if (!anim) return;
     for (const sh of anim.shots) {
       if (sh.sys !== this.sysId) continue;
@@ -437,6 +441,22 @@ export class View {
       g.userData.fresh = false;
       const body = g.userData.body;
       body.rotation.y = info.kind === 'citadel' ? t * 0.8 : g.userData.heading;
+      if (info.kind !== 'citadel') {
+        // bank into turns, and now and then throw a barrel roll in a dogfight
+        const ud = g.userData, dts = Math.max(0.001, frameDt / 1000);
+        const turnRate = wrapAngle(ud.heading - (ud.prevHead ?? ud.heading)) / dts;
+        ud.prevHead = ud.heading;
+        ud.bank = (ud.bank || 0) + (Math.max(-0.9, Math.min(0.9, -turnRate * 0.45)) - (ud.bank || 0)) * (1 - Math.exp(-dts * 5));
+        if (!ud.rollT && animating && this.fighting.has(id) && Math.random() < dts * 0.3) { ud.rollT = now; ud.rollDir = Math.random() < 0.5 ? 1 : -1; }
+        let roll = 0;
+        if (ud.rollT) {
+          const q = (now - ud.rollT) / 700;
+          if (q >= 1) ud.rollT = 0;
+          else roll = ud.rollDir * Math.PI * 2 * (q < 0.5 ? 2 * q * q : 1 - 2 * (1 - q) * (1 - q));
+        }
+        body.rotation.order = 'YXZ';
+        body.rotation.x = ud.bank + roll;
+      }
       body.scale.setScalar(sc);
       for (const m of g.userData.mats) {
         if (m.isSpriteMaterial) continue;
