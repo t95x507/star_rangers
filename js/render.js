@@ -8,7 +8,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as D from './data.js';
 import { SUB, planetPos, stats } from './sim.js';
-import { buildShipModel } from './models.js';
+import { buildShipModel, attachEngineGlows } from './models.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as Audio from './audio.js';
 import { buildNebulae } from './nebula.js';
 
@@ -73,6 +74,10 @@ export class View {
     this.composer.addPass(new OutputPass());
 
     this.scene.add(new THREE.AmbientLight(0x8899bb, 0.35));
+    // soft studio reflections so metal hulls catch highlights instead of looking like plastic
+    const pmrem = new THREE.PMREMGenerator(r);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.35;
     this._background();
     this.sysGroup = new THREE.Group(); this.scene.add(this.sysGroup);
     this.shipGroup = new THREE.Group(); this.scene.add(this.shipGroup);
@@ -172,7 +177,7 @@ export class View {
     sys.planets.forEach((p, i) => {
       const orbit = new THREE.LineLoop(this._circleGeo(p.r, 160), new THREE.LineBasicMaterial({ color: sys.owner === 'dom' ? 0x553377 : 0x2a3a5a, transparent: true, opacity: 0.6 }));
       g.add(orbit);
-      const m = new THREE.Mesh(new THREE.SphereGeometry(p.size, 40, 20), new THREE.MeshStandardMaterial({ map: planetTexture(p.color, i + p.r), roughness: 0.95, metalness: 0 }));
+      const m = new THREE.Mesh(new THREE.SphereGeometry(p.size, 40, 20), new THREE.MeshStandardMaterial({ map: planetTexture(p.color, i + p.r), roughness: 0.95, metalness: 0, envMapIntensity: 0.15 }));
       m.userData = { type: 'planet', id: p.id };
       if (p.ring) {
         const ring = new THREE.Mesh(new THREE.RingGeometry(p.size * 1.4, p.size * 2.1, 64), new THREE.MeshBasicMaterial({ color: 0xccbb99, transparent: true, opacity: 0.45, side: THREE.DoubleSide }));
@@ -198,16 +203,7 @@ export class View {
     const model = buildShipModel(s);
     const body = new THREE.Group();
     body.add(model.group);
-    const engines = [];
-    for (const e of model.engines) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: model.engineColor, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.85 }));
-      sp.position.copy(e.pos);
-      sp.userData.base = e.size * 4;
-      sp.scale.setScalar(sp.userData.base);
-      body.add(sp);
-      engines.push(sp);
-      model.mats.push(sp.material);
-    }
+    const engines = attachEngineGlows(model, body, this.glowTex);
     if (s.kind === 'citadel') {
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0xa040ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
       halo.scale.setScalar(900); g.add(halo);

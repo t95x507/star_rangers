@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Верфь — модели кораблей</title>
+<link rel="stylesheet" href="style.css?v=20260929i">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "./js/models.js": "./js/models.js?v=20260929i",
+  "./js/data.js": "./js/data.js?v=20260929i",
+  "./js/viewer.js": "./js/viewer.js?v=20260929i"
+} }
+</script>
+<style>
+  #vpanel { position: fixed; top: 8px; left: 8px; width: 250px; max-height: calc(100vh - 16px); overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; z-index: 5; }
+  #vpanel h1 { font-size: 16px; margin: 0 0 8px; }
+  #vpanel h3 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin: 10px 0 4px; font-weight: normal; }
+  #vpanel .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; }
+  #vpanel .grid button { padding: 3px 0; font-size: 11px; }
+  #vpanel button.on { background: #1e3c6c; border-color: #4a7ac0; }
+  #vpanel .row { margin: 6px 0; gap: 6px; }
+  #vpanel label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); margin: 4px 0; }
+  #vinfo { font-size: 12px; color: var(--dim); margin-top: 8px; min-height: 32px; }
+  #vinfo b { color: #fff; }
+  .lbl.model { color: #cfe3ff; font-size: 12px; text-align: center; }
+  .lbl.model small { display: block; color: var(--dim); font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="vpanel">
+  <h1>🛠 Верфь: модели</h1>
+  <div id="vlist"></div>
+  <div class="row"><button id="vall">Показать всё</button><a href="index.html"><button>← В игру</button></a></div>
+  <label><input type="checkbox" id="vspin" checked> Вращать модели</label>
+  <label>Цвет игрока <input type="color" id="vcolor" value="#4cff9a"></label>
+  <div id="vinfo">ЛКМ — вращать, ПКМ — двигать, колесо — зум. Клик по кнопке — приблизить модель.</div>
+</div>
+<script type="module" src="js/viewer.js?v=20260929i"></script>
+</body>
+</html>
