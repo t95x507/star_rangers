@@ -46,6 +46,15 @@ function planetTexture(color, seed) {
   return t;
 }
 
+// how each weapon looks: beams are instant, tracers/projectiles travel (as a fraction of the turn animation)
+const SHOT_STYLE = {
+  w1: { type: 'beam', travel: 0, show: 0.03 },
+  w2: { type: 'tracer', travel: 0.015 },
+  w3: { type: 'proj', travel: 0.035, size: 70 },
+  w4: { type: 'proj', travel: 0.06, size: 45 },
+  w5: { type: 'beam', travel: 0, show: 0.07 },
+};
+
 export class View {
   constructor(container) {
     this.container = container;
@@ -109,6 +118,8 @@ export class View {
 
     this.raycaster = new THREE.Raycaster();
     this.fx = [];
+    this.floaters = [];
+    this.lootGeo = new THREE.BoxGeometry(30, 30, 30);
     this.animKey = null;
     this.focusPending = true;
     addEventListener('resize', () => this.resize());
@@ -273,18 +284,27 @@ export class View {
     this.fx = [];
     this.anim = anim;
     this.animStart = start;
+    this.dmg = {}; // target id -> [[hit time as anim fraction, damage]]
     if (!anim) return;
     for (const sh of anim.shots) {
       if (sh.sys !== this.sysId) continue;
-      const W = D.byId(D.WEAPONS, sh.w);
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-        new THREE.LineBasicMaterial({ color: new THREE.Color(W.color).multiplyScalar(3), transparent: true, blending: THREE.AdditiveBlending }));
-      line.frustumCulled = false; line.visible = false;
-      const spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: W.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      spark.visible = false; spark.scale.setScalar(90);
-      this.fxGroup.add(line, spark);
-      this.fx.push({ obj: line, kind: 'shot', sh, spark });
-      this.fx.push({ obj: spark, kind: 'none' });
+      const W = D.byId(D.WEAPONS, sh.w), style = SHOT_STYLE[sh.w] || SHOT_STYLE.w1;
+      const hit = sh.k / SUB + style.travel;
+      (this.dmg[sh.b] ||= []).push([hit, sh.d]);
+      const col = new THREE.Color(W.color).multiplyScalar(3);
+      const fx = { kind: 'shot', sh, style, hit, W };
+      if (style.type === 'beam' || style.type === 'tracer') {
+        fx.obj = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+          new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending }));
+        fx.obj.frustumCulled = false;
+      } else {
+        fx.obj = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: col, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      }
+      fx.obj.visible = false;
+      fx.spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: W.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      fx.spark.visible = false;
+      this.fxGroup.add(fx.obj, fx.spark);
+      this.fx.push(fx, { obj: fx.spark, kind: 'none' });
     }
     for (const b of anim.booms) {
       if (b.sys !== this.sysId) continue;
@@ -293,6 +313,37 @@ export class View {
       this.fxGroup.add(sp);
       this.fx.push({ obj: sp, kind: 'boom', b });
     }
+    for (const pk of anim.pickups || []) {
+      if (pk.sys !== this.sysId) continue;
+      const box = new THREE.Mesh(this.lootGeo, new THREE.MeshStandardMaterial({ color: 0xffcc44, emissive: 0xffaa00, emissiveIntensity: 1.2 }));
+      box.position.set(pk.x, 0, pk.y); box.visible = false;
+      const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+        new THREE.LineBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending }));
+      beam.frustumCulled = false; beam.visible = false;
+      this.fxGroup.add(box, beam);
+      this.fx.push({ obj: box, kind: 'pickup', pk, beam }, { obj: beam, kind: 'none' });
+    }
+  }
+
+  // floating text (damage numbers, picked-up cargo) that rises and fades in world space
+  _floater(text, pos, color, big = false) {
+    const el = document.createElement('div');
+    el.className = 'lbl float' + (big ? ' big' : '');
+    el.innerHTML = '<span></span>';
+    el.firstChild.textContent = text;
+    el.style.color = typeof color === 'number' ? '#' + new THREE.Color(color).getHexString() : color;
+    const o = new CSS2DObject(el);
+    o.position.copy(pos).setY(20);
+    o.center.set(0.5, 1);
+    this.scene.add(o);
+    this.floaters.push({ o, t0: performance.now(), life: big ? 1800 : 900 });
+  }
+
+  // damage a ship has taken so far in the current animation (and in total)
+  _dmgUpTo(id, f) {
+    let sum = 0, all = 0;
+    for (const [t, d] of this.dmg[id] || []) { all += d; if (t <= f) sum += d; }
+    return [sum, all];
   }
 
   animFrac() { return this.anim ? Math.min(1, (performance.now() - this.animStart) / ANIM_MS) : 1; }
@@ -402,8 +453,12 @@ export class View {
       const hp = s ? s.hull : 0;
       const el = g.userData.el;
       el.querySelector('.n').textContent = info.name + (info.wanted > 0 ? ' ⚠' : '');
-      el.querySelector('.hp i').style.width = Math.max(0, Math.min(100, (animating ? g.userData.lastHp ?? hp : hp) / S.maxHull * 100)) + '%';
-      if (!animating) g.userData.lastHp = hp;
+      let shown = hp;
+      if (animating) { // drain the bar hit by hit instead of jumping at the end of the turn
+        const [sofar, all] = this._dmgUpTo(id, f);
+        shown = (s ? Math.min(S.maxHull, hp + all) : info.hull) - sofar;
+      }
+      el.querySelector('.hp i').style.width = Math.max(0, Math.min(100, shown / S.maxHull * 100)) + '%';
       el.classList.toggle('me', id === meId);
       el.classList.toggle('sel', !!selected && selected.id === id);
     }
@@ -427,22 +482,32 @@ export class View {
     if (!animating) this._lootBefore = new Set(lseen);
 
     // effects
+    const nowF = this.anim ? (now - this.animStart) / ANIM_MS : 1;
     for (const fx of this.fx) {
       if (fx.kind === 'shot') {
-        const tt = fx.sh.k / SUB;
-        const on = f >= tt - 0.02 && f <= tt + 0.07;
-        fx.obj.visible = on; fx.spark.visible = on;
-        if (on && !fx.played) { fx.played = true; const a = this.ships.get(fx.sh.a); if (a) Audio.weapon(fx.sh.w, this._hearing(a.position)); }
-        if (on) {
-          const a = this.ships.get(fx.sh.a), b = this.ships.get(fx.sh.b);
-          if (a && b) {
-            fx.obj.geometry.setFromPoints([a.position.clone().setY(5), b.position.clone().setY(5)]);
-            fx.spark.position.copy(b.position);
-            fx.spark.scale.setScalar(sc * (60 + fx.sh.d * 2));
-          } else { fx.obj.visible = fx.spark.visible = false; }
+        const tt = fx.sh.k / SUB, sty = fx.style;
+        const a = this.ships.get(fx.sh.a), b = this.ships.get(fx.sh.b);
+        if (!a || !b) { fx.obj.visible = fx.spark.visible = false; continue; }
+        if (nowF >= tt && !fx.played) { fx.played = true; Audio.weapon(fx.sh.w, this._hearing(a.position)); }
+        const A = a.position.clone().setY(5), B = b.position.clone().setY(5);
+        if (sty.type === 'beam') {
+          fx.obj.visible = nowF >= tt && nowF <= tt + sty.show;
+          if (fx.obj.visible) fx.obj.geometry.setFromPoints([A, B]);
+        } else {
+          const q = (nowF - tt) / Math.max(0.001, sty.travel);
+          fx.obj.visible = q >= 0 && q < 1;
+          if (fx.obj.visible) {
+            const P = A.clone().lerp(B, q);
+            if (sty.type === 'tracer') fx.obj.geometry.setFromPoints([P, A.clone().lerp(B, Math.min(1, q + 0.25))]);
+            else { fx.obj.position.copy(P); fx.obj.scale.setScalar(sty.size * sc); }
+          }
         }
+        const h = nowF - fx.hit;
+        fx.spark.visible = h >= 0 && h < 0.05;
+        if (fx.spark.visible) { fx.spark.position.copy(B); fx.spark.scale.setScalar(sc * (50 + fx.sh.d * 4) * (1 - h * 10)); }
+        if (h >= 0 && !fx.numbered) { fx.numbered = true; this._floater('-' + fx.sh.d, B, fx.W.color); }
       } else if (fx.kind === 'boom') {
-        const el = (now - this.animStart) / ANIM_MS - fx.b.k / SUB;
+        const el = nowF - fx.b.k / SUB;
         fx.obj.visible = el >= 0 && el < 0.6;
         if (el >= 0 && !fx.played) { fx.played = true; Audio.explosion(fx.b.big, this._hearing(fx.obj.position)); }
         if (fx.obj.visible) {
@@ -450,7 +515,32 @@ export class View {
           fx.obj.scale.setScalar((150 + q * 550) * fx.b.big * sc);
           fx.obj.material.opacity = 1 - q;
         }
+      } else if (fx.kind === 'pickup') {
+        // the container waits, then a tractor beam pulls it into the ship
+        const tt = fx.pk.k / SUB, q = (nowF - tt) / 0.2;
+        const ship = this.ships.get(fx.pk.ship);
+        const box = fx.obj;
+        box.rotation.set(now / 700, now / 900, 0);
+        if (q < 0) { box.visible = fx.pk.all; box.position.set(fx.pk.x, 0, fx.pk.y); box.scale.setScalar(sc); fx.beam.visible = false; }
+        else if (q < 1 && ship) {
+          const e = q * q;
+          box.visible = true;
+          box.position.set(fx.pk.x + (ship.position.x - fx.pk.x) * e, 0, fx.pk.y + (ship.position.z - fx.pk.y) * e);
+          box.scale.setScalar(sc * (1 - 0.75 * q));
+          fx.beam.visible = true;
+          fx.beam.geometry.setFromPoints([ship.position.clone().setY(3), box.position.clone().setY(3)]);
+        } else {
+          box.visible = fx.beam.visible = false;
+          if (!fx.done && ship) { fx.done = true; this._floater(fx.pk.text, ship.position, '#ffd66b', true); }
+        }
       }
+    }
+    for (let i = this.floaters.length - 1; i >= 0; i--) {
+      const fl = this.floaters[i], age = (now - fl.t0) / fl.life;
+      if (age >= 1) { this.scene.remove(fl.o); this.floaters.splice(i, 1); continue; }
+      const span = fl.o.element.firstChild;
+      span.style.transform = 'translateY(' + (-age * 45) + 'px)';
+      span.style.opacity = String(1 - age * age);
     }
 
     // own ship helpers

@@ -173,3 +173,6 @@ body.is-host .host-only { display: flex; }
 .ptrack.on { background: #1e3c6c; border-color: #4a7ac0; }
 #player .pbtns { display: flex; gap: 6px; margin-top: 8px; }
 #player .pbtns button { flex: 1; font-size: 16px; }
+.lbl.float { font-weight: 700; font-size: 13px; pointer-events: none; }
+.lbl.float span { display: inline-block; text-shadow: 0 0 4px #000, 0 0 2px #000; }
+.lbl.float.big { font-size: 14px; }

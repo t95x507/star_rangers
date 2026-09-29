@@ -537,7 +537,7 @@ function respawn(st, s) {
 }
 
 export function resolveTurn(st) {
-  const anim = { day: st.day, frames: {}, shots: [], booms: [], out: [] };
+  const anim = { day: st.day, frames: {}, shots: [], booms: [], pickups: [], out: [] };
   const ships = Object.values(st.ships);
 
   for (const s of ships) aiThink(st, s);
@@ -600,11 +600,11 @@ export function resolveTurn(st) {
         }
       }
     }
-    // loot pickup
+    // loot pickup: only by an explicit "pick up" order, never automatically
     for (const s of active) {
-      if (s.kind !== 'player' || !alive(s) || s.landed) continue;
+      if (s.kind !== 'player' || !alive(s) || s.landed || !s.order || s.order.type !== 'loot') continue;
       for (const l of st.loot) {
-        if (l.sys !== s.sys || l.taken || dist(l.x, l.y, s.x, s.y) > 70) continue;
+        if (l.id !== s.order.id || l.taken || dist(l.x, l.y, s.x, s.y) > 70) continue;
         const cap = stats(s).cargoCap;
         let got = [];
         if (l.credits) { s.credits += l.credits; got.push(l.credits + ' кр.'); l.credits = 0; }
@@ -614,19 +614,25 @@ export function resolveTurn(st) {
           if (!l.cargo[g]) delete l.cargo[g];
         }
         if (!Object.keys(l.cargo).length) l.taken = true;
-        if (got.length) log(st, 'Подобрано: ' + got.join(', '), s.id);
-        if (s.order && s.order.type === 'loot' && s.order.id === l.id) s.order = null;
+        if (got.length) {
+          log(st, 'Подобрано: ' + got.join(', '), s.id);
+          anim.pickups.push({ sys: s.sys, x: l.x, y: l.y, ship: s.id, k, text: '+' + got.join(', +'), all: !!l.taken });
+        } else log(st, 'Трюм полон — нечего подобрать', s.id);
+        s.order = null;
+        break;
       }
     }
     st.loot = st.loot.filter(l => !l.taken);
-    // combat: each weapon fires once per day
+    // combat: every weapon fires `shots` times a day (its daily damage split between them),
+    // with a cooldown between shots, so fights play out across the whole day
     for (const s of active) {
       if (!alive(s) || s.landed || !s.weapons.length) continue;
       const list = bySys[s.sys];
-      const f = fired[s.id] ||= [];
+      const f = fired[s.id] ||= s.weapons.map(() => ({ n: 0, next: 1 + Math.floor(R() * 3) }));
       for (let wi = 0; wi < s.weapons.length; wi++) {
-        if (f[wi]) continue;
         const W = D.byId(D.WEAPONS, s.weapons[wi]);
+        const fw = f[wi];
+        if (fw.n >= W.shots || k < fw.next) continue;
         let tg = null;
         if (s.order && s.order.type === 'attack') {
           const c = st.ships[s.order.target];
@@ -634,8 +640,8 @@ export function resolveTurn(st) {
         }
         if (!tg) tg = nearest(list, c => !c.landed && hostileTo(s, c), s, W.range);
         if (!tg) continue;
-        f[wi] = 1;
-        const dmg = Math.round(W.dmg * rnd(0.8, 1.2));
+        fw.n++; fw.next = k + Math.floor(SUB / W.shots);
+        const dmg = Math.max(1, Math.round(W.dmg / W.shots * rnd(0.8, 1.2)));
         tg.hull -= dmg;
         anim.shots.push({ sys: s.sys, a: s.id, b: tg.id, k, w: W.id, d: dmg });
         if (tg.kind === 'player' && !tg.aggro[s.id] && !hostileTo(tg, s)) log(st, '⚠ ' + s.name + ' атакует вас!', tg.id);
