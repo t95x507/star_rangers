@@ -67,6 +67,7 @@ export class View {
     ctl.screenSpacePanning = false;
     ctl.maxPolarAngle = 1.25; ctl.minDistance = 500; ctl.maxDistance = 14000;
     ctl.enableDamping = true; ctl.dampingFactor = 0.12;
+    ctl.addEventListener('start', () => { this.focusAnim = null; }); // manual camera move cancels a focus flight
 
     this.composer = new EffectComposer(r);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -479,6 +480,17 @@ export class View {
       this.selRing.scale.setScalar((selected.type === 'planet' ? selR : selR * sc) * (1 + 0.05 * Math.sin(now / 200)));
     }
 
+    if (this.focusAnim) {
+      const p = this._objPos(this.focusAnim.obj);
+      if (!p) this.focusAnim = null;
+      else {
+        const done = now - this.focusAnim.t0 > 700;
+        const d = p.clone().setY(0).sub(this.controls.target).multiplyScalar(done ? 1 : 1 - Math.exp(-frameDt / 1000 * 9));
+        this.controls.target.add(d);
+        this.camera.position.add(d);
+        if (done) this.focusAnim = null;
+      }
+    }
     this.controls.update();
     this.composer.render();
     this.labels.render(this.scene, this.camera);
@@ -500,6 +512,16 @@ export class View {
     const d = p.distanceTo(this.controls.target);
     const zoom = this.camera.position.distanceTo(this.controls.target);
     return Math.max(0, 1 - d / (2500 + zoom * 0.6)) * Math.min(1, 3500 / zoom);
+  }
+
+  // Smoothly fly the camera to a ship / planet / loot container, tracking it if it moves.
+  focusOn(obj) {
+    this.focusAnim = obj ? { obj, t0: performance.now() } : null;
+  }
+
+  _objPos(obj) {
+    const o = obj.type === 'ship' ? this.ships.get(obj.id) : obj.type === 'planet' ? this.planets.get(obj.id) : obj.type === 'loot' ? this.loot.get(obj.id) : null;
+    return o ? o.position : null;
   }
 
   focus(v) {

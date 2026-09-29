@@ -350,6 +350,7 @@ function enterGame() {
   UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
   $('endturn').onclick = toggleReady;
   $('planetbtn').onclick = togglePlanet;
+  $('mybtn').onclick = focusMe;
   const vs = Audio.getSettings();
   for (const kind of ['music', 'sfx']) {
     const el = $('vol-' + kind);
@@ -381,7 +382,8 @@ function enterGame() {
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
     else if (e.code === 'KeyP') togglePlanet();
-    else if (e.code === 'KeyF') { const g = G.view.ships.get(G.me); if (g) G.view.focus(g.position); }
+    else if (e.code === 'KeyF') focusMe();
+    else if (e.code === 'KeyG') G.focusSel();
     else if (e.code === 'Enter') $('chat').focus();
     else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); UI.openPlayer(false); refreshUI(); }
   });
@@ -396,6 +398,9 @@ function showPlanet() {
   G.planetHidden = null;
   refreshUI();
 }
+
+function focusMe() { G.view.focusOn({ type: 'ship', id: G.me }); }
+G.focusSel = () => { if (G.sel) G.view.focusOn(G.sel); };
 
 function togglePlanet() {
   const me = G.st.ships[G.me];

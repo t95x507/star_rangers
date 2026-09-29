@@ -381,14 +381,16 @@ export function selinfo(G) {
   let h = describe(G, sel);
   if (!h) { box.hidden = true; if (sel && me && !me.jump) G.sel = null; return; }
   const btn = (label, o) => `<button data-order='${JSON.stringify(o)}'>${label}</button>`;
+  let acts = '';
   if (sel.type === 'ship') {
     const s = st.ships[sel.id];
     if (s.id !== G.me && !s.landed) {
       const peaceful = !hostileTo(me, s) && (s.kind === 'trader' || s.kind === 'militia');
-      h += '<div class="btns">' + btn(peaceful ? '⚠ Атаковать (розыск!)' : '⚔ Атаковать', { type: 'attack', target: s.id }) + (s.kind === 'citadel' ? '' : btn('Следовать', { type: 'follow', target: s.id })) + '</div>';
+      acts = btn(peaceful ? '⚠ Атаковать (розыск!)' : '⚔ Атаковать', { type: 'attack', target: s.id }) + (s.kind === 'citadel' ? '' : btn('Следовать', { type: 'follow', target: s.id }));
     }
-  } else if (sel.type === 'planet') h += '<div class="btns">' + btn('Сесть', { type: 'land', planet: sel.id }) + '</div>';
-  else if (sel.type === 'loot') h += '<div class="btns">' + btn('Подобрать', { type: 'loot', id: sel.id }) + '</div>';
+  } else if (sel.type === 'planet') { if (me.landed !== sel.id) acts = btn('Сесть', { type: 'land', planet: sel.id }); }
+  else if (sel.type === 'loot') acts = btn('Подобрать', { type: 'loot', id: sel.id });
+  h += '<div class="btns"><button data-focus="1" title="Навести камеру на объект">🎯 Фокус [G]</button>' + acts + '</div>';
   box.hidden = false;
   box.innerHTML = h;
 }
@@ -407,6 +409,7 @@ export function tooltip(G, hit, x, y) {
 
 export function bindSel(G) {
   $('selinfo').addEventListener('click', e => {
+    if (e.target.closest('button[data-focus]')) { G.focusSel(); return; }
     const b = e.target.closest('button[data-order]');
     if (b) G.order(JSON.parse(b.dataset.order));
   });
