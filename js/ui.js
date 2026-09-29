@@ -390,7 +390,7 @@ export function selinfo(G) {
     }
   } else if (sel.type === 'planet') { if (me.landed !== sel.id) acts = btn('Сесть', { type: 'land', planet: sel.id }); }
   else if (sel.type === 'loot') acts = btn('Подобрать', { type: 'loot', id: sel.id });
-  h += '<div class="btns"><button data-focus="1" title="Навести камеру на объект">🎯 Фокус [G]</button>' + acts + '</div>';
+  h += '<div class="btns"><button data-focus="1" title="Навести камеру на объект">🎯 Фокус [F]</button>' + acts + '</div>';
   box.hidden = false;
   box.innerHTML = h;
 }

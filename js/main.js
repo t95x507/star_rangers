@@ -382,8 +382,7 @@ function enterGame() {
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
     else if (e.code === 'KeyP') togglePlanet();
-    else if (e.code === 'KeyF') focusMe();
-    else if (e.code === 'KeyG') G.focusSel();
+    else if (e.code === 'KeyF') { if (G.sel) G.focusSel(); else focusMe(); } // selection first, otherwise own ship
     else if (e.code === 'Enter') $('chat').focus();
     else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); UI.openPlayer(false); refreshUI(); }
   });

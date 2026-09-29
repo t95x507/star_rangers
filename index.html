@@ -4,22 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Звёздные Рейнджеры P2P</title>
-<link rel="stylesheet" href="style.css?v=20260929n">
+<link rel="stylesheet" href="style.css?v=20260929o">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-  "./js/main.js": "./js/main.js?v=20260929n",
-  "./js/ui.js": "./js/ui.js?v=20260929n",
-  "./js/sim.js": "./js/sim.js?v=20260929n",
-  "./js/net.js": "./js/net.js?v=20260929n",
-  "./js/render.js": "./js/render.js?v=20260929n",
-  "./js/data.js": "./js/data.js?v=20260929n",
-  "./js/models.js": "./js/models.js?v=20260929n",
-  "./js/audio.js": "./js/audio.js?v=20260929n",
-  "./js/nebula.js": "./js/nebula.js?v=20260929n",
-  "./js/trails.js": "./js/trails.js?v=20260929n"
+  "./js/main.js": "./js/main.js?v=20260929o",
+  "./js/ui.js": "./js/ui.js?v=20260929o",
+  "./js/sim.js": "./js/sim.js?v=20260929o",
+  "./js/net.js": "./js/net.js?v=20260929o",
+  "./js/render.js": "./js/render.js?v=20260929o",
+  "./js/data.js": "./js/data.js?v=20260929o",
+  "./js/models.js": "./js/models.js?v=20260929o",
+  "./js/audio.js": "./js/audio.js?v=20260929o",
+  "./js/nebula.js": "./js/nebula.js?v=20260929o",
+  "./js/trails.js": "./js/trails.js?v=20260929o"
 } }
 </script>
 </head>
@@ -50,7 +50,7 @@
         <li><b>Пробел</b> включает/выключает ускорение. Когда ускорение включили <b>все</b> игроки, дни идут подряд без пауз. Если рядом враг — ускорение само выключается.</li>
         <li>Когда <b>все</b> игроки сидят на планетах или стоят в космосе без приказа — время стоит на паузе, а ускорение у всех сбрасывается. Нажмите Пробел, чтобы пустить время (если нажмут все — дни полетят без задержек).</li>
         <li>ЛКМ: по планете — сесть, по врагу — атаковать, по контейнеру — подобрать, по пустоте — лететь. ПКМ — двигать камеру, колесо — зум, СКМ — вращать.</li>
-        <li><b>M</b> — карта галактики и гиперпрыжки, <b>I</b> — корабль и трюм, <b>P</b> — экран планеты, <b>F</b> — к своему кораблю, <b>G</b> — к выделенному, <b>Enter</b> — чат.</li>
+        <li><b>M</b> — карта галактики и гиперпрыжки, <b>I</b> — корабль и трюм, <b>P</b> — экран планеты, <b>F</b> — камеру к выделенному (или к своему кораблю), <b>Enter</b> — чат.</li>
         <li>На планете: рынок (покупай дёшево, продавай дорого), верфь, ремонт и топливо.</li>
         <li>Цель: уничтожить все цитадели доминаторов. Они шлют флоты и захватывают соседние системы!</li>
       </ul>
@@ -69,7 +69,7 @@
       <label class="chk host-only">Длина хода
         <select id="timer"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="15">15 с</option><option value="20">20 с</option><option value="30">30 с</option><option value="60">60 с</option><option value="0">∞ только по ускорению</option></select>
       </label>
-      <button id="mybtn">Мой корабль [F]</button>
+      <button id="mybtn">Мой корабль</button>
       <button id="planetbtn">Планета [P]</button>
       <button id="shipbtn">Корабль и трюм [I]</button>
       <button id="mapbtn">Карта галактики [M]</button>
@@ -100,6 +100,6 @@
   <div id="toast"></div>
 </div>
 
-<script type="module" src="js/main.js?v=20260929n"></script>
+<script type="module" src="js/main.js?v=20260929o"></script>
 </body>
 </html>
