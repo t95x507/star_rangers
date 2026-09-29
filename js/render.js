@@ -323,6 +323,11 @@ export class View {
     }
     const f = this.anim ? Math.min(1, (now - this.animStart) / ANIM_MS) : 1;
     const animating = this.anim && f < 1;
+    // trails age on game time only: frozen while the world is paused or waiting for the next day
+    const frameDt = this._lastFrame ? Math.min(100, now - this._lastFrame) : 0;
+    this._lastFrame = now;
+    if (animating) this.trailClock = (this.trailClock || 0) + frameDt;
+    const trailNow = this.trailClock || 0;
     const t = animating ? this.anim.day + f : st.day;
     const camDist = this.camera.position.distanceTo(this.controls.target);
     const sc = Math.max(1, camDist / 3800);
@@ -376,7 +381,7 @@ export class View {
       if (g.userData.trails.length) {
         g.updateMatrixWorld(true);
         const emitting = g.visible && pos.a > 0.3;
-        g.userData.engines.forEach((e, i) => g.userData.trails[i].update(e.getWorldPosition(this._tmpV), now, emitting, e.userData.base * 0.4 * sc, pos.a));
+        g.userData.engines.forEach((e, i) => g.userData.trails[i].update(e.getWorldPosition(this._tmpV), trailNow, emitting && animating, e.userData.base * 0.4 * sc, pos.a));
       }
       const S = stats(info);
       const hp = s ? s.hull : 0;
