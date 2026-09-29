@@ -427,10 +427,7 @@ export class View {
       g.position.set(pos.x, 0, pos.y);
       let want = null;
       if (Math.abs(pos.dx) + Math.abs(pos.dy) > 1.5) want = Math.atan2(-pos.dy, pos.dx);
-      else if (!animating && s && s.order && info.kind !== 'citadel') {
-        const tp = this.orderPoint(st, s, t);
-        if (tp && Math.hypot(tp[0] - s.x, tp[1] - s.y) > 5) want = Math.atan2(-(tp[1] - s.y), tp[0] - s.x);
-      }
+      else if (!animating && s && s.hd != null && info.kind !== 'citadel') want = -s.hd; // keep the course the ship ended the turn with
       if (want != null) { // turn smoothly towards the wanted course
         if (g.userData.fresh) g.userData.heading = want;
         else {
