@@ -393,18 +393,14 @@ function aiThink(st, s) {
 
 // ---------------------------------------------------------------- navigation
 // Ships turn at a limited rate (and slow down in hard turns), lead orbiting planets
-// to meet them, and fly around the star and other planets along tangents.
+// to meet them, and fly around the star along tangents (planets are not obstacles).
 
 const TURN = 0.45;       // max heading change per substep, radians
 const SUN_PAD = 260;     // keep-out margin around the star
-const PLANET_PAD = 70;   // ... and around planets that are not our destination
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-function obstaclesAt(st, sysId, t, skipPlanet) {
-  const sys = st.systems[sysId];
-  const obs = [{ x: 0, y: 0, r: sys.star.size + SUN_PAD }];
-  for (const p of sys.planets) if (p.id !== skipPlanet) { const [x, y] = planetPos(p, t); obs.push({ x, y, r: p.size + PLANET_PAD }); }
-  return obs;
+function obstaclesAt(st, sysId) {
+  return [{ x: 0, y: 0, r: st.systems[sysId].star.size + SUN_PAD }];
 }
 
 // Aim point to meet a planet that keeps moving along its orbit: refine the travel time a few times.
@@ -444,7 +440,7 @@ function steer(sx, sy, tx, ty, obs) {
 export function stepShip(st, s, t) {
   const o = s.order;
   const speed = stats(s).speed, step = speed / SUB;
-  let tx, ty, stop = 0, skip = null;
+  let tx, ty, stop = 0;
   if (o.type === 'move') { tx = o.x; ty = o.y; }
   else if (o.type === 'follow' || o.type === 'attack') {
     const tg = st.ships[o.target];
@@ -454,7 +450,6 @@ export function stepShip(st, s, t) {
   } else if (o.type === 'land') {
     const p = findPlanet(st, o.planet);
     if (!p || p.sys !== s.sys) return { cancel: true };
-    skip = p.id;
     const [px, py] = planetPos(p, t);
     if (dist(s.x, s.y, px, py) <= step + p.size * 0.5) return { arrived: true, tx: px, ty: py };
     [tx, ty] = intercept(p, t, s.x, s.y, speed);
@@ -463,7 +458,7 @@ export function stepShip(st, s, t) {
     if (!l) return { cancel: true };
     tx = l.x; ty = l.y;
   } else return { cancel: true };
-  const obs = obstaclesAt(st, s.sys, t, skip);
+  const obs = obstaclesAt(st, s.sys);
   const sun = obs[0], gd = Math.hypot(tx, ty);
   if (gd < sun.r) { const k = sun.r / (gd || 1); tx = gd ? tx * k : sun.r; ty *= k; } // goal inside the star: stop at its edge
   if (o.type !== 'land') {
