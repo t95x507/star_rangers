@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as D from './data.js';
-import { SUB, planetPos, stats } from './sim.js';
+import { SUB, planetPos, stats, predictPath } from './sim.js';
 import { buildShipModel, attachEngineGlows } from './models.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as Audio from './audio.js';
@@ -460,10 +460,16 @@ export class View {
       this.rangeRing.visible = range > 0;
       this.rangeRing.position.copy(mg.position);
       this.rangeRing.scale.setScalar(range);
-      const tp = this.orderPoint(st, me, t);
-      this.orderLine.visible = !!tp;
-      if (tp) {
-        this.orderLine.geometry.setFromPoints([mg.position.clone().setY(2), new THREE.Vector3(tp[0], 2, tp[1])]);
+      // planned route, simulated with the same navigation code the host uses
+      const key = me.order && JSON.stringify(me.order) + '|' + st.day + '|' + Math.round(me.x) + ',' + Math.round(me.y);
+      if (key !== this._routeKey) { this._routeKey = key; this._route = me.order && me.order.type !== 'jump' ? predictPath(st, me, 20) : null; }
+      const route = this._route;
+      this.orderLine.visible = !!(route && route.length > 1);
+      if (this.orderLine.visible) {
+        const pts = [mg.position.clone().setY(2)];
+        for (let i = 1; i < route.length; i++) pts.push(new THREE.Vector3(route[i][0], 2, route[i][1]));
+        this.orderLine.geometry.dispose();
+        this.orderLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
         this.orderLine.computeLineDistances();
         this.orderLine.material.color.set(me.order.type === 'attack' ? 0xff5555 : me.order.type === 'land' ? 0x66ccff : 0x66ffaa);
       }

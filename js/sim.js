@@ -391,6 +391,113 @@ function aiThink(st, s) {
   }
 }
 
+// ---------------------------------------------------------------- navigation
+// Ships turn at a limited rate (and slow down in hard turns), lead orbiting planets
+// to meet them, and fly around the star and other planets along tangents.
+
+const TURN = 0.45;       // max heading change per substep, radians
+const SUN_PAD = 260;     // keep-out margin around the star
+const PLANET_PAD = 70;   // ... and around planets that are not our destination
+const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+function obstaclesAt(st, sysId, t, skipPlanet) {
+  const sys = st.systems[sysId];
+  const obs = [{ x: 0, y: 0, r: sys.star.size + SUN_PAD }];
+  for (const p of sys.planets) if (p.id !== skipPlanet) { const [x, y] = planetPos(p, t); obs.push({ x, y, r: p.size + PLANET_PAD }); }
+  return obs;
+}
+
+// Aim point to meet a planet that keeps moving along its orbit: refine the travel time a few times.
+function intercept(p, t, sx, sy, speed) {
+  let T = 0;
+  for (let i = 0; i < 6; i++) { const [x, y] = planetPos(p, t + T); T = Math.min(3, dist(sx, sy, x, y) / speed); }
+  return planetPos(p, t + T);
+}
+
+// Unit direction to fly: straight at the goal, or along a tangent of the first obstacle in the way.
+function steer(sx, sy, tx, ty, obs) {
+  const L = Math.hypot(tx - sx, ty - sy) || 1, ux = (tx - sx) / L, uy = (ty - sy) / L;
+  let block = null, bd = Infinity;
+  for (const o of obs) {
+    const ox = o.x - sx, oy = o.y - sy;
+    if (Math.hypot(ox, oy) < o.r) { block = o; break; } // already inside a keep-out zone
+    const proj = ox * ux + oy * uy;
+    if (proj <= 0 || proj > L) continue;
+    if (Math.abs(ox * uy - oy * ux) < o.r && proj < bd) { block = o; bd = proj; }
+  }
+  if (!block) return [ux, uy];
+  const ox = block.x - sx, oy = block.y - sy, d = Math.hypot(ox, oy);
+  if (d <= block.r) { // inside: slide outwards along the tangent that points towards the goal
+    const nx = -ox / d, ny = -oy / d;
+    let tx2 = -ny, ty2 = nx;
+    if (tx2 * ux + ty2 * uy < 0) { tx2 = -tx2; ty2 = -ty2; }
+    const k = Math.hypot(tx2 + nx * 0.5, ty2 + ny * 0.5);
+    return [(tx2 + nx * 0.5) / k, (ty2 + ny * 0.5) / k];
+  }
+  const base = Math.atan2(oy, ox), a = Math.asin(Math.min(1, block.r / d));
+  const ang = ux * oy - uy * ox > 0 ? base - a : base + a; // obstacle on the left -> pass it on the right
+  return [Math.cos(ang), Math.sin(ang)];
+}
+
+// Advances one ship by one substep along its order. Mutates x, y and heading `hd`.
+// Returns null while travelling, { cancel } if the order became invalid, { arrived, tx, ty } on arrival.
+export function stepShip(st, s, t) {
+  const o = s.order;
+  const speed = stats(s).speed, step = speed / SUB;
+  let tx, ty, stop = 0, skip = null;
+  if (o.type === 'move') { tx = o.x; ty = o.y; }
+  else if (o.type === 'follow' || o.type === 'attack') {
+    const tg = st.ships[o.target];
+    if (!tg || !alive(tg) || tg.sys !== s.sys || tg.jump || tg.landed) return { cancel: true };
+    tx = tg.x; ty = tg.y;
+    stop = o.type === 'follow' ? 140 : Math.max(80, 0.75 * Math.min(...s.weapons.map(w => D.byId(D.WEAPONS, w).range), 400));
+  } else if (o.type === 'land') {
+    const p = findPlanet(st, o.planet);
+    if (!p || p.sys !== s.sys) return { cancel: true };
+    skip = p.id;
+    const [px, py] = planetPos(p, t);
+    if (dist(s.x, s.y, px, py) <= step + p.size * 0.5) return { arrived: true, tx: px, ty: py };
+    [tx, ty] = intercept(p, t, s.x, s.y, speed);
+  } else if (o.type === 'loot') {
+    const l = st.loot.find(l => l.id === o.id);
+    if (!l) return { cancel: true };
+    tx = l.x; ty = l.y;
+  } else return { cancel: true };
+  const obs = obstaclesAt(st, s.sys, t, skip);
+  const sun = obs[0], gd = Math.hypot(tx, ty);
+  if (gd < sun.r) { const k = sun.r / (gd || 1); tx = gd ? tx * k : sun.r; ty *= k; } // goal inside the star: stop at its edge
+  if (o.type !== 'land') {
+    const d = dist(s.x, s.y, tx, ty);
+    if (d - stop <= step) {
+      if (d > stop) { const f = (d - stop) / d; s.x += (tx - s.x) * f; s.y += (ty - s.y) * f; }
+      return { arrived: true, tx, ty };
+    }
+  }
+  const [dx, dy] = steer(s.x, s.y, tx, ty, obs);
+  const want = Math.atan2(dy, dx);
+  if (s.hd == null) s.hd = want;
+  s.hd = wrapA(s.hd + Math.max(-TURN, Math.min(TURN, wrapA(want - s.hd))));
+  const f = Math.max(0.35, Math.cos(wrapA(want - s.hd))); // brake in hard turns
+  s.x += Math.cos(s.hd) * step * f;
+  s.y += Math.sin(s.hd) * step * f;
+  return null;
+}
+
+// Where a ship will go under its current order (no combat), for drawing the planned route.
+export function predictPath(st, ship, days = 3) {
+  const pts = [[ship.x, ship.y]];
+  if (!ship.order || ship.jump || ship.sys == null || ship.order.type === 'jump') return pts;
+  if (ship.landed && ship.order.type === 'land' && ship.order.planet === ship.landed) return pts;
+  const s = { ...ship, landed: null, order: { ...ship.order } };
+  for (let k = 1; k <= days * SUB; k++) {
+    const r = stepShip(st, s, st.day + k / SUB);
+    if (r && r.cancel) break;
+    pts.push(r && r.tx != null && ship.order.type === 'land' ? [r.tx, r.ty] : [s.x, s.y]);
+    if (r) break;
+  }
+  return pts;
+}
+
 // ---------------------------------------------------------------- turn resolution
 
 function dropLoot(st, s) {
@@ -483,40 +590,20 @@ export function resolveTurn(st) {
       if (s.landed) { landedPos(s, t); continue; }
       const o = s.order;
       if (!o) continue;
-      const S = stats(s);
-      let tx, ty, stop = 0;
-      if (o.type === 'move') { tx = o.x; ty = o.y; }
-      else if (o.type === 'follow' || o.type === 'attack') {
-        const tg = st.ships[o.target];
-        if (!tg || !alive(tg) || tg.sys !== s.sys || tg.jump || tg.landed) { s.order = null; continue; }
-        tx = tg.x; ty = tg.y;
-        stop = o.type === 'follow' ? 140 : Math.max(80, 0.75 * Math.min(...s.weapons.map(w => D.byId(D.WEAPONS, w).range), 400));
-      } else if (o.type === 'land') {
-        const p = findPlanet(st, o.planet);
-        if (!p || p.sys !== s.sys) { s.order = null; continue; }
-        [tx, ty] = planetPos(p, t);
-        stop = 30;
-      } else if (o.type === 'loot') {
-        const l = st.loot.find(l => l.id === o.id);
-        if (!l) { s.order = null; continue; }
-        tx = l.x; ty = l.y;
-      } else continue;
-      const step = S.speed / SUB;
-      const d = dist(s.x, s.y, tx, ty);
-      if (d - stop <= step) {
-        if (d > stop) { const f = (d - stop) / d; s.x += (tx - s.x) * f; s.y += (ty - s.y) * f; }
-        if (o.type === 'move') s.order = null;
-        else if (o.type === 'land') {
-          const sys = st.systems[s.sys];
-          if (sys.owner === 'dom' && s.kind !== 'dom') { s.order = null; if (s.kind === 'player') log(st, 'Планета оккупирована доминаторами — посадка невозможна', s.id); }
-          else if (s.kind === 'player' && s.wanted > 0) { s.order = null; log(st, 'Вы в розыске — планета отказала в посадке (ещё ' + s.wanted + ' дн.)', s.id); }
-          else {
-            s.landed = o.planet; s.order = null; s.ai.wait = rint(1, 3);
-            [s.x, s.y] = [tx, ty];
-            if (s.kind === 'player') log(st, 'Посадка на ' + findPlanet(st, o.planet).name, s.id);
-          }
+      const r = stepShip(st, s, t);
+      if (!r) continue;
+      if (r.cancel) { s.order = null; continue; }
+      if (o.type === 'move') s.order = null;
+      else if (o.type === 'land') {
+        const sys = st.systems[s.sys];
+        if (sys.owner === 'dom' && s.kind !== 'dom') { s.order = null; if (s.kind === 'player') log(st, 'Планета оккупирована доминаторами — посадка невозможна', s.id); }
+        else if (s.kind === 'player' && s.wanted > 0) { s.order = null; log(st, 'Вы в розыске — планета отказала в посадке (ещё ' + s.wanted + ' дн.)', s.id); }
+        else {
+          s.landed = o.planet; s.order = null; s.ai.wait = rint(1, 3);
+          [s.x, s.y] = [r.tx, r.ty];
+          if (s.kind === 'player') log(st, 'Посадка на ' + findPlanet(st, o.planet).name, s.id);
         }
-      } else { s.x += (tx - s.x) / d * step; s.y += (ty - s.y) / d * step; }
+      }
     }
     // loot pickup
     for (const s of active) {
