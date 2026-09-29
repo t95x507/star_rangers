@@ -3,7 +3,6 @@
 import * as THREE from 'three';
 
 const MAX = 48;          // stored points per trail
-const LIFE = 1.3;        // seconds a point stays visible
 const MIN_STEP = 5;      // world units between stored points
 const TELEPORT = 600;    // a jump larger than this resets the trail
 
@@ -15,7 +14,9 @@ const INDEX = (() => {
 })();
 
 export class Trail {
-  constructor(color) {
+  // life: seconds (of turn-animation time) a point stays visible
+  constructor(color, life = 1.3) {
+    this.life = life;
     this.pts = []; // {x, y, z, t}
     this.pos = new Float32Array((MAX + 1) * 2 * 3);
     this.col = new Float32Array((MAX + 1) * 2 * 4);
@@ -45,7 +46,7 @@ export class Trail {
         if (pts.length > MAX) pts.shift();
       }
     }
-    while (pts.length && t - pts[0].t > LIFE) pts.shift();
+    while (pts.length && t - pts[0].t > this.life) pts.shift();
     // the live head follows the nozzle every frame so the ribbon never lags behind the ship
     const all = emitting && pts.length ? [...pts, { x: p.x, y: p.y, z: p.z, t }] : pts;
     const n = all.length;
@@ -54,7 +55,7 @@ export class Trail {
       const a = all[Math.max(0, i - 1)], b = all[Math.min(n - 1, i + 1)];
       let dx = b.x - a.x, dz = b.z - a.z;
       const len = Math.hypot(dx, dz) || 1; dx /= len; dz /= len;
-      const age = Math.min(1, (t - all[i].t) / LIFE);
+      const age = Math.min(1, (t - all[i].t) / this.life);
       const fresh = i / (n - 1); // 0 = tail, 1 = nozzle
       const w = width * (0.25 + 0.75 * fresh) * (1 - age * 0.5);
       const alpha = Math.pow(1 - age, 1.6) * Math.pow(fresh, 0.7) * 0.75 * opacity;

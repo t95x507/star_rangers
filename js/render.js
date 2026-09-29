@@ -14,7 +14,7 @@ import * as Audio from './audio.js';
 import { buildNebulae } from './nebula.js';
 import { Trail } from './trails.js';
 
-export const ANIM_MS = 1700;
+export const ANIM_MS = 3000; // how long one game day plays on screen
 
 function glowTexture(inner = 'rgba(255,255,255,1)', mid = 'rgba(255,200,120,0.35)') {
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -251,7 +251,7 @@ export class View {
     el.style.color = '#' + new THREE.Color(s.color).getHexString();
     const lo = new CSS2DObject(el); lo.position.set(0, 0, Math.max(60, model.radius + 15)); lo.center.set(0.5, 0);
     g.add(lo);
-    const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor));
+    const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor, ANIM_MS / 1000 * 0.75));
     for (const tr of trails) this.trailGroup.add(tr.mesh);
     g.userData = { body, label: lo, el, heading: Math.random() * 6.28, fresh: true, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
     this.shipGroup.add(g);
@@ -530,11 +530,11 @@ export class View {
         if (fx.spark.visible) { fx.spark.position.copy(B); fx.spark.scale.setScalar(sc * (50 + fx.sh.d * 4) * (1 - h * 10)); }
         if (h >= 0 && !fx.numbered) { fx.numbered = true; this._floater('-' + fx.sh.d, B, fx.W.color); }
       } else if (fx.kind === 'boom') {
-        const el = nowF - fx.b.k / SUB;
-        fx.obj.visible = el >= 0 && el < 0.6;
+        const el = nowF - fx.b.k / SUB, len = 1000 / ANIM_MS; // explosions last ~1 s whatever the day length
+        fx.obj.visible = el >= 0 && el < len;
         if (el >= 0 && !fx.played) { fx.played = true; Audio.explosion(fx.b.big, this._hearing(fx.obj.position)); }
         if (fx.obj.visible) {
-          const q = el / 0.6;
+          const q = el / len;
           fx.obj.scale.setScalar((150 + q * 550) * fx.b.big * sc);
           fx.obj.material.opacity = 1 - q;
         }
