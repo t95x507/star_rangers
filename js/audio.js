@@ -128,8 +128,9 @@ const THEMES = [
     chords: [[38, 50, 57, 60, 65], [36, 48, 55, 60, 64], [34, 46, 53, 58, 62], [36, 48, 55, 58, 64]] },
   { name: 'Торговый путь', desc: 'светлая, ровное арпеджио', bar: 6, wave: 'sawtooth', cutoff: [700, 1800], padVol: 0.045, bellP: 0.1, bellRatio: 2, arp: [0, 2, 1, 3, 2, 4, 3, 1],
     chords: [[50, 62, 66, 69, 73], [52, 62, 66, 71, 76], [47, 59, 62, 66, 71], [55, 62, 67, 71, 74], [50, 62, 66, 69, 76], [45, 61, 64, 69, 73]] },
-  { name: 'Чужие звёзды', desc: 'тревожная, плывущие аккорды', bar: 9, wave: 'square', cutoff: [350, 900], padVol: 0.035, bellP: 0.35, bellRatio: 2.76, arp: null, glide: true,
-    chords: [[40, 52, 53, 59, 64], [41, 53, 56, 60, 65], [40, 52, 55, 58, 63], [38, 50, 53, 56, 62]] },
+  // dark E minor: add9 / #11 colours and a chromatic-mediant drop to C minor instead of raw semitone clusters
+  { name: 'Чужие звёзды', desc: 'мрачная, тревожная, ми минор', bar: 9, wave: 'triangle', cutoff: [280, 850], padVol: 0.08, bellP: 0.22, bellRatio: 2.76, arp: null, drone: true, ghost: true,
+    chords: [[40, 52, 59, 62, 66], [36, 52, 55, 59, 64], [40, 52, 59, 62, 66], [41, 53, 57, 64, 71], [36, 51, 55, 60, 62], [35, 54, 57, 59, 64]] },
 ];
 const THEME_BARS = 14;
 
@@ -169,6 +170,7 @@ export const TRACKS = [
   { id: 'battle', name: 'Бой', desc: '132 BPM, бочка, бас и стабы' },
 ];
 export function playTrack(id) {
+  if (typeof id === 'number' ? !THEMES[id] : id !== 'auto' && id !== 'battle') return;
   mode = id;
   if (typeof id === 'number' && ctx) {
     theme = id; themeBar = 0;
@@ -202,6 +204,15 @@ function pad(th, notes, t) {
   b.type = th.drone ? 'sine' : 'triangle'; b.frequency.value = mtof(notes[0] - 12);
   bg.gain.setValueAtTime(0.0001, t); bg.gain.linearRampToValueAtTime(th.drone ? 0.2 : 0.12, t + 1.5); bg.gain.linearRampToValueAtTime(0.0001, t + len + 1);
   b.connect(bg); bg.connect(ambGain); b.start(t); b.stop(t + len + 1.2);
+  if (th.ghost) { // faint high voice drifting on a slow vibrato, like a distant signal
+    const o = ctx.createOscillator(), lfo = ctx.createOscillator(), lg = ctx.createGain(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = mtof(notes[notes.length - 1] + 12);
+    lfo.frequency.value = 0.18; lg.gain.value = 9; // cents
+    lfo.connect(lg); lg.connect(o.detune);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.018, t + len * 0.5); g.gain.linearRampToValueAtTime(0.0001, t + len + 1.5);
+    o.connect(g); g.connect(reverbSend);
+    o.start(t); lfo.start(t); o.stop(t + len + 1.7); lfo.stop(t + len + 1.7);
+  }
   if (th.drone) { // slowly beating fifth above the drone
     const d = ctx.createOscillator(), dg = ctx.createGain();
     d.type = 'sine'; d.frequency.value = mtof(notes[0] - 5) * 1.003;
