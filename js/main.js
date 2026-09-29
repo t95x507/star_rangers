@@ -61,7 +61,7 @@ async function startHost(state) {
   if (code) localStorage.setItem(ROOM_KEY, code);
   G.isHost = true;
   G.code = code;
-  G.st = state;
+  G.st = Sim.migrate(state);
   for (const id in state.players) Object.assign(state.players[id], { online: false, pause: false });
   G.me = Sim.addPlayer(state, name, color);
   G.peers = new Map();
@@ -175,7 +175,7 @@ function hostTick() {
   if (G.dirty && (newDay || now - G.lastFull >= FULL_EVERY)) sendFull();
 }
 
-// positions of every ship in the systems players are looking at: [id, sys, x, y, heading*100, hull, landed]
+// positions of every ship in the systems players are looking at: [id, sys, x, y, heading*100, hull, landed, shield]
 function snapShips(st) {
   const watch = new Set();
   for (const pid in st.players) { const s = st.ships[pid]; if (s && st.players[pid].online) watch.add(s.jump ? s.jump.to : s.sys); }
@@ -183,7 +183,7 @@ function snapShips(st) {
   for (const id in st.ships) {
     const s = st.ships[id];
     if (s.jump || s.sys == null || !Sim.alive(s) || !watch.has(s.sys)) continue;
-    out.push([id, s.sys, Math.round(s.x), Math.round(s.y), s.hd == null ? null : Math.round(s.hd * 100), Math.ceil(s.hull), s.landed ? 1 : 0]);
+    out.push([id, s.sys, Math.round(s.x), Math.round(s.y), s.hd == null ? null : Math.round(s.hd * 100), Math.ceil(s.hull), s.landed ? 1 : 0, Math.round(s.shield || 0)]);
   }
   return out;
 }
@@ -287,8 +287,8 @@ function applyState(m) {
 
 // play a cue for fresh log lines addressed to us (or important global news)
 const LOG_SOUNDS = [
-  [/ПОБЕДА|освобождена/, 'victory'], [/захвачена|Галактика пала/, 'bad'], [/⚠/, 'alert'],
-  [/Награда/, 'coin'], [/Установлено/, 'buyEq'],
+  [/ПОБЕДА|освобождена|Чудовище повержено|Контракт выполнен/, 'victory'], [/захвачена|Галактика пала/, 'bad'], [/⚠|☠/, 'alert'],
+  [/Награда|Продано|Сдано протоплазмы/, 'coin'], [/Установлено|Куплено|Улучшено|Контракт принят/, 'buyEq'],
   [/Недостаточно|Нет денег|не поместится|Нет свободных|Нет места|слоты заняты|Сначала сним|нельзя снять|отказала|невозможна|Не хватает|Слишком далеко/, 'error'],
 ];
 // Positions between full states: patch the state we have and feed the renderer.
@@ -296,7 +296,7 @@ function applyTick(m) {
   if (!G.st) return;
   if (!G.isHost) {
     G.st.day = Math.floor(m.T / Sim.SUB); G.st.sub = m.T % Sim.SUB;
-    for (const e of m.s) { const s = G.st.ships[e[0]]; if (s) { s.x = e[2]; s.y = e[3]; if (e[4] != null) s.hd = e[4] / 100; s.hull = e[5]; } }
+    for (const e of m.s) { const s = G.st.ships[e[0]]; if (s) { s.x = e[2]; s.y = e[3]; if (e[4] != null) s.hd = e[4] / 100; s.hull = e[5]; s.shield = e[7]; } }
   }
   if (G.view) G.view.pushTick(m);
 }

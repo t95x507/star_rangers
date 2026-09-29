@@ -7,8 +7,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { buildShipModel, attachEngineGlows } from './models.js';
-import { HULLS, KIND_NAMES, KIND_COLORS } from './data.js';
+import { buildShipModel, attachEngineGlows, buildStation } from './models.js';
+import { HULLS, KIND_NAMES, KIND_COLORS, BOSSES, STATIONS } from './data.js';
 
 const $ = id => document.getElementById(id);
 const container = $('game');
@@ -53,78 +53,99 @@ function glowTexture() {
 }
 const glowTex = glowTexture();
 
-const ROWS = [
-  { kind: 'player', name: 'Игрок' },
-  { kind: 'trader', name: 'Торговец' },
-  { kind: 'pirate', name: 'Пират' },
-  { kind: 'militia', name: 'Военный' },
-  { kind: 'dom', name: 'Доминатор' },
+// sections of the showroom: each is a row (or two) of models
+const BASE = HULLS.filter(h => ['h1', 'h2', 'h3', 'h4', 'h5'].includes(h.id)).map(h => h.id);
+const SECTIONS = [
+  { name: 'Игрок: все корпуса', items: HULLS.map(h => ({ kind: 'player', hull: h.id })) },
+  { name: 'Торговцы', items: ['h1', 'h2', 'h6', 'h8'].map(h => ({ kind: 'trader', hull: h })) },
+  { name: 'Пираты', items: BASE.map(h => ({ kind: 'pirate', hull: h })) },
+  { name: 'Военные', items: BASE.map(h => ({ kind: 'militia', hull: h })) },
+  { name: 'Доминаторы', items: [...BASE.map(h => ({ kind: 'dom', hull: h })), { kind: 'citadel', hull: 'h5', label: 'Цитадель' }] },
+  { name: 'Чудовища', items: Object.keys(BOSSES).map(k => ({ kind: k === 'swarm' ? 'swarm' : 'boss', boss: k, hull: 'h5', label: BOSSES[k].name })) },
+  { name: 'Станции', items: Object.keys(STATIONS).map(k => ({ station: k, label: STATIONS[k].name })) },
 ];
-const GAP_X = 230, GAP_Z = 210;
+const GAP_X = 260, GAP_Z = 260;
 let playerColor = 0x4cff9a;
-const items = []; // { key, kind, hull, holder, model, engines, radius, label }
+const items = []; // { sec, i, holder, model, engines, radius, label, info }
 
-function makeItem(kind, hull, x, z) {
-  const color = kind === 'player' ? playerColor : KIND_COLORS[kind] || 0xffffff;
-  const model = buildShipModel({ kind, eq: { hull }, color });
+function makeItem(it, x, z) {
+  let model, engines = [];
   const holder = new THREE.Group();
   holder.position.set(x, 0, z);
+  if (it.station) model = buildStation(it.station);
+  else model = buildShipModel({ kind: it.kind, boss: it.boss, eq: { hull: it.hull }, color: it.kind === 'player' ? playerColor : KIND_COLORS[it.kind] || 0xffffff });
   holder.add(model.group);
-  const engines = attachEngineGlows(model, holder, glowTex);
+  if (!it.station) engines = attachEngineGlows(model, holder, glowTex);
+  // monsters and stations are much bigger: shrink them to fit the grid, the focus zooms in anyway
+  const k = Math.min(1, 110 / model.radius);
+  holder.scale.setScalar(k);
   scene.add(holder);
   const el = document.createElement('div');
   el.className = 'lbl model';
-  el.innerHTML = kind === 'citadel' ? 'Цитадель доминаторов' : `${HULLS.find(h => h.id === hull).name}<small>${KIND_NAMES[kind]}</small>`;
-  const lo = new CSS2DObject(el); lo.position.set(0, -model.radius * 0.35, model.radius * 0.55); lo.center.set(0.5, 0);
+  const hl = HULLS.find(h => h.id === it.hull);
+  el.innerHTML = it.label ? esc(it.label) : `${hl.name}<small>${KIND_NAMES[it.kind]}</small>`;
+  const lo = new CSS2DObject(el); lo.position.set(0, -model.radius * 0.35, model.radius * 0.8); lo.center.set(0.5, 0);
   holder.add(lo);
-  return { kind, hull, holder, model, engines, radius: model.radius, label: lo };
+  return { ...it, holder, model, engines, radius: model.radius * k, label: lo };
 }
+const esc = t => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 function build() {
   for (const it of items) { it.label.element.remove(); scene.remove(it.holder); }
   items.length = 0;
-  ROWS.forEach((row, r) => HULLS.forEach((h, c) => items.push(makeItem(row.kind, h.id, (c - 2) * GAP_X, (r - 2) * GAP_Z))));
-  const cit = makeItem('citadel', 'h5', 0, (ROWS.length - 2) * GAP_Z + 420);
-  cit.holder.scale.setScalar(0.55);
-  items.push(cit);
+  let row = 0;
+  SECTIONS.forEach((sec, si) => {
+    sec.items.forEach((it, i) => {
+      const r = row + Math.floor(i / 5), c = i % 5;
+      items.push({ ...makeItem(it, (c - 2) * GAP_X, r * GAP_Z), sec: si, i });
+    });
+    row += Math.ceil(sec.items.length / 5);
+  });
 }
 build();
 
 // ---- panel: jump to any model
 function panel() {
   let h = '';
-  for (const row of ROWS) {
-    h += `<h3>${row.name}</h3><div class="grid">`;
-    HULLS.forEach(hl => { h += `<button data-kind="${row.kind}" data-hull="${hl.id}" title="${hl.name}">${hl.name.slice(0, 5)}</button>`; });
+  SECTIONS.forEach((sec, si) => {
+    h += `<h3>${sec.name}</h3><div class="grid">`;
+    sec.items.forEach((it, i) => {
+      const name = it.label || HULLS.find(x => x.id === it.hull).name;
+      h += `<button data-sec="${si}" data-i="${i}" title="${esc(name)}">${esc(name.replace(/[«»]/g, '').slice(0, 6))}</button>`;
+    });
     h += '</div>';
-  }
-  h += '<h3>Боссы</h3><button data-kind="citadel" data-hull="h5">Цитадель доминаторов</button>';
+  });
   $('vlist').innerHTML = h;
 }
 panel();
 
 let focusAnim = null;
 function focusOn(it) {
-  document.querySelectorAll('#vlist button').forEach(b => b.classList.toggle('on', !!it && b.dataset.kind === it.kind && b.dataset.hull === it.hull));
-  const target = it ? it.holder.position.clone() : new THREE.Vector3(0, 0, 150);
-  const dist = it ? it.radius * it.holder.scale.x * 3.2 + 60 : 1500;
+  document.querySelectorAll('#vlist button').forEach(b => b.classList.toggle('on', !!it && +b.dataset.sec === it.sec && +b.dataset.i === it.i));
+  const target = it ? it.holder.position.clone() : new THREE.Vector3(0, 0, 1300);
+  const dist = it ? it.radius * 3.2 + 60 : 3000;
   const dir = it ? new THREE.Vector3(0.9, 0.7, 1).normalize() : new THREE.Vector3(0, 0.75, 0.66).normalize();
   focusAnim = { t0: performance.now(), fromT: controls.target.clone(), toT: target, fromP: camera.position.clone(), toP: target.clone().add(dir.multiplyScalar(dist)) };
   if (it) {
     const hl = HULLS.find(h => h.id === it.hull);
-    $('vinfo').innerHTML = it.kind === 'citadel' ? '<b>Цитадель доминаторов</b><br>стационарная крепость, 3 орудия' :
-      `<b>${hl.name}</b> · ${KIND_NAMES[it.kind]}<br>${it.kind === 'dom' ? 'кристаллический корабль' : `корпус ${hl.hp}, трюм ${hl.cargo}, слотов ${hl.slots}`}`;
+    let t = `<b>${esc(it.label || hl.name)}</b>`;
+    if (it.station) t += `<br>${STATIONS[it.station].desc}`;
+    else if (it.boss) t += `<br>${BOSSES[it.boss].desc || 'трутень Матки Роя'}`;
+    else if (it.kind === 'dom') t += ' · доминатор<br>кристаллический корабль';
+    else if (it.kind === 'citadel') t += '<br>стационарная крепость доминаторов';
+    else t += ` · ${KIND_NAMES[it.kind]}<br>прочность ${hl.hp}, броня ${hl.armor}, трюм ${hl.cargo}, слотов ${hl.slots}+${hl.mods}`;
+    $('vinfo').innerHTML = t;
   }
 }
 $('vlist').addEventListener('click', e => {
-  const b = e.target.closest('button[data-kind]');
-  if (b) focusOn(items.find(it => it.kind === b.dataset.kind && it.hull === b.dataset.hull));
+  const b = e.target.closest('button[data-sec]');
+  if (b) focusOn(items.find(it => it.sec === +b.dataset.sec && it.i === +b.dataset.i));
 });
 $('vall').onclick = () => focusOn(null);
 $('vcolor').oninput = e => { playerColor = parseInt(e.target.value.slice(1), 16); build(); };
 
-camera.position.set(0, 1100, 1150);
-controls.target.set(0, 0, 150);
+camera.position.set(0, 2400, 3300);
+controls.target.set(0, 0, 1300);
 
 function resize() {
   const w = container.clientWidth, h = container.clientHeight;
@@ -139,7 +160,8 @@ renderer.setAnimationLoop(now => {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if ($('vspin').checked) spin += dt * 0.35;
   for (const it of items) {
-    it.model.group.rotation.y = it.kind === 'citadel' ? spin * 0.5 : spin;
+    it.model.group.rotation.y = it.kind === 'citadel' || it.station ? spin * 0.5 : spin;
+    if (it.model.anim) it.model.anim(now / 1000);
     // engine sprites live on the holder, so rotate their positions with the model
     it.model.engines.forEach((e, i) => {
       const p = e.pos.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), it.model.group.rotation.y);

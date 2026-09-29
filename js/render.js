@@ -8,7 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as D from './data.js';
 import { SUB, planetPos, stats, predictPath } from './sim.js';
-import { buildShipModel, attachEngineGlows } from './models.js';
+import { buildShipModel, attachEngineGlows, buildStation } from './models.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as Audio from './audio.js';
 import { buildNebulae } from './nebula.js';
@@ -48,11 +48,21 @@ function planetTexture(color, seed) {
 
 // how each weapon looks: beams are instant, tracers/projectiles travel (times in fractions of a game day)
 const SHOT_STYLE = {
-  w1: { type: 'beam', travel: 0, show: 0.03 },
-  w2: { type: 'tracer', travel: 0.015 },
-  w3: { type: 'proj', travel: 0.035, size: 70 },
-  w4: { type: 'proj', travel: 0.06, size: 45 },
-  w5: { type: 'beam', travel: 0, show: 0.07 },
+  beam: { type: 'beam', travel: 0, show: 0.03 },
+  pulse: { type: 'beam', travel: 0, show: 0.012 },
+  ion: { type: 'beam', travel: 0, show: 0.045 },
+  rail: { type: 'beam', travel: 0, show: 0.06 },
+  anni: { type: 'beam', travel: 0, show: 0.07 },
+  tentacle: { type: 'beam', travel: 0, show: 0.05 },
+  wave: { type: 'beam', travel: 0, show: 0.06 },
+  mg: { type: 'tracer', travel: 0.01 },
+  tracer: { type: 'tracer', travel: 0.015 },
+  swarm: { type: 'tracer', travel: 0.02 },
+  proj: { type: 'proj', travel: 0.035, size: 70 },
+  acid: { type: 'proj', travel: 0.05, size: 60 },
+  missile: { type: 'proj', travel: 0.06, size: 45 },
+  torp: { type: 'proj', travel: 0.1, size: 90 },
+  nova: { type: 'proj', travel: 0.05, size: 120 },
 };
 
 const wrapAngle = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -204,6 +214,7 @@ export class View {
       g.add(haze);
     }
     sys.planets.forEach((p, i) => {
+      if (p.station) return this._makeStation(g, sys, p);
       const orbit = new THREE.LineLoop(this._circleGeo(p.r, 160), new THREE.LineBasicMaterial({ color: sys.owner === 'dom' ? 0x553377 : 0x2a3a5a, transparent: true, opacity: 0.6 }));
       g.add(orbit);
       const m = new THREE.Mesh(new THREE.SphereGeometry(p.size, 40, 20), new THREE.MeshStandardMaterial({ map: planetTexture(p.color, i + p.r), roughness: 0.95, metalness: 0, envMapIntensity: 0.15 }));
@@ -225,6 +236,28 @@ export class View {
       this.planets.set(p.id, m);
     });
     this.focusPending = true;
+  }
+
+  // a station: its own model on a faint orbit, picked and docked like a planet
+  _makeStation(g, sys, p) {
+    const col = D.STATIONS[p.station].col;
+    const orbit = new THREE.LineLoop(this._circleGeo(p.r, 160), new THREE.LineBasicMaterial({ color: sys.owner === 'dom' ? 0x553377 : col, transparent: true, opacity: 0.18 }));
+    g.add(orbit);
+    const model = buildStation(p.station);
+    const m = new THREE.Group();
+    m.add(model.group);
+    m.userData = { type: 'planet', id: p.id, station: true, anim: model.anim };
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(p.size + 60, 12, 8), this.hitMat);
+    hit.userData = { type: 'planet', id: p.id };
+    m.add(hit);
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl planet station';
+    lbl.textContent = p.name;
+    lbl.style.color = '#' + new THREE.Color(col).getHexString();
+    const lo = new CSS2DObject(lbl); lo.position.set(0, -p.size - 30, 0); lo.center.set(0.5, 0);
+    m.add(lo);
+    g.add(m);
+    this.planets.set(p.id, m);
   }
 
   _dropTrails(g) {
@@ -254,14 +287,14 @@ export class View {
     hit.scale.setScalar(Math.max(1, model.radius * 1.3 / 95));
     g.add(hit);
     const el = document.createElement('div');
-    el.className = 'lbl ship ' + s.kind;
-    el.innerHTML = '<span class="n"></span><div class="hp"><i></i></div>';
+    el.className = 'lbl ship ' + s.kind + (s.rank === 'elite' ? ' elite' : '');
+    el.innerHTML = '<span class="n"></span><div class="sh"><i></i></div><div class="hp"><i></i></div>';
     el.style.color = '#' + new THREE.Color(s.color).getHexString();
     const lo = new CSS2DObject(el); lo.position.set(0, 0, Math.max(60, model.radius + 15)); lo.center.set(0.5, 0);
     g.add(lo);
     const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor, DAY_MS / 1000 * 0.75));
     for (const tr of trails) this.trailGroup.add(tr.mesh);
-    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, fresh: true, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
+    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, fresh: true, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius, anim: model.anim };
     this.shipGroup.add(g);
     this.ships.set(s.id, g);
     return g;
@@ -352,7 +385,8 @@ export class View {
   }
 
   _addShot(sh) {
-    const W = D.byId(D.WEAPONS, sh.w), style = SHOT_STYLE[sh.w] || SHOT_STYLE.w1;
+    const W = D.eqDef(sh.w), base = SHOT_STYLE[W.style] || SHOT_STYLE.beam;
+    const style = sh.sp ? { type: 'none', travel: base.travel + base.show * 0.5 || 0.03 } : base; // splash: only the blast at the target
     const tt = sh.T / SUB, hit = tt + style.travel;
     const col = new THREE.Color(W.color).multiplyScalar(3);
     const fx = { kind: 'shot', sh, style, tt, hit, W, end: hit + 0.06 };
@@ -366,8 +400,10 @@ export class View {
     fx.obj.visible = false;
     fx.spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.boomTex, color: W.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     fx.spark.visible = false;
-    this.fxGroup.add(fx.obj, fx.spark);
-    this.fx.push(fx, { obj: fx.spark, kind: 'none', end: fx.end });
+    fx.bubble = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0x66ccff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    fx.bubble.visible = false;
+    this.fxGroup.add(fx.obj, fx.spark, fx.bubble);
+    this.fx.push(fx, { obj: fx.spark, kind: 'none', end: fx.end }, { obj: fx.bubble, kind: 'none', end: fx.end });
   }
 
   _addBoom(b) {
@@ -436,7 +472,8 @@ export class View {
       const m = this.planets.get(p.id);
       const [x, y] = planetPos(p, t);
       m.position.set(x, 0, y);
-      m.rotation.y = t * 0.6;
+      if (m.userData.station) { m.rotation.y = t * 0.25; m.userData.anim(t); }
+      else m.rotation.y = t * 0.6;
     }
 
     // ships
@@ -484,6 +521,7 @@ export class View {
         body.rotation.x = ud.bank + roll;
       }
       body.scale.setScalar(sc);
+      if (ud.anim) ud.anim(now / 1000); // tentacles, wings, pulsing flesh
       for (const m of ud.mats) {
         if (m.isSpriteMaterial) continue;
         m.opacity = alpha;
@@ -505,6 +543,9 @@ export class View {
       const el = ud.el;
       el.querySelector('.n').textContent = info.name + (info.wanted > 0 ? ' ⚠' : '');
       el.querySelector('.hp i').style.width = Math.max(0, Math.min(100, hp / S.maxHull * 100)) + '%';
+      const shEl = el.querySelector('.sh');
+      shEl.hidden = !S.shieldMax;
+      if (S.shieldMax) shEl.firstChild.style.width = Math.max(0, Math.min(100, ((hs || cur.ships.get(id))[7] || 0) / S.shieldMax * 100)) + '%';
       el.classList.toggle('me', id === meId);
       el.classList.toggle('sel', !!selected && selected.id === id);
     }
@@ -533,10 +574,11 @@ export class View {
       if (fx.kind === 'shot') {
         const tt = fx.tt, sty = fx.style;
         const a = this.ships.get(fx.sh.a), b = this.ships.get(fx.sh.b);
-        if (!a || !b) { fx.obj.visible = fx.spark.visible = false; continue; }
-        if (nowF >= tt && !fx.played) { fx.played = true; Audio.weapon(fx.sh.w, this._hearing(a.position)); }
+        if (!a || !b) { fx.obj.visible = fx.spark.visible = fx.bubble.visible = false; continue; }
+        if (nowF >= tt && !fx.played && sty.type !== 'none') { fx.played = true; Audio.weapon(fx.W.snd, this._hearing(a.position)); }
         const A = a.position.clone().setY(5), B = b.position.clone().setY(5);
-        if (sty.type === 'beam') {
+        if (sty.type === 'none') fx.obj.visible = false;
+        else if (sty.type === 'beam') {
           fx.obj.visible = nowF >= tt && nowF <= tt + sty.show;
           if (fx.obj.visible) fx.obj.geometry.setFromPoints([A, B]);
         } else {
@@ -549,9 +591,19 @@ export class View {
           }
         }
         const h = nowF - fx.hit;
-        fx.spark.visible = h >= 0 && h < 0.05;
-        if (fx.spark.visible) { fx.spark.position.copy(B); fx.spark.scale.setScalar(sc * (50 + fx.sh.d * 4) * (1 - h * 10)); }
-        if (h >= 0 && !fx.numbered) { fx.numbered = true; this._floater('-' + fx.sh.d, B, fx.W.color); }
+        fx.spark.visible = h >= 0 && h < 0.05 && !fx.sh.miss && fx.sh.d > 0;
+        if (fx.spark.visible) { fx.spark.position.copy(B); fx.spark.scale.setScalar(sc * (50 + fx.sh.d * 3) * (1 - h * 10)); }
+        // a shield taking the hit flashes as a blue bubble around the target
+        fx.bubble.visible = h >= 0 && h < 0.05 && fx.sh.sd > 0;
+        if (fx.bubble.visible) { fx.bubble.position.copy(B); fx.bubble.scale.setScalar((b.userData.radius * 3.2 + 40) * sc); fx.bubble.material.opacity = 0.7 * (1 - h * 20); }
+        if (h >= 0 && !fx.numbered) {
+          fx.numbered = true;
+          if (fx.sh.miss) this._floater('мимо', B, '#8a9ab0');
+          else {
+            if (fx.sh.sd) this._floater('-' + fx.sh.sd, B.clone().setX(B.x - 30 * sc), '#66ccff');
+            if (fx.sh.d) this._floater('-' + fx.sh.d, B, fx.W.color);
+          }
+        }
       } else if (fx.kind === 'boom') {
         const el = nowF - fx.tt;
         fx.obj.visible = el >= 0 && el < fx.len;
@@ -601,7 +653,7 @@ export class View {
     // own ship helpers
     const mg = me && this.ships.get(meId);
     if (me && mg && mg.visible && !me.jump) {
-      const range = Math.max(0, ...me.weapons.map(w => D.byId(D.WEAPONS, w).range));
+      const range = Math.max(0, ...me.weapons.map(w => D.eqDef(w).range)) * stats(me).rangeMul;
       this.rangeRing.visible = range > 0;
       this.rangeRing.position.copy(mg.position);
       this.rangeRing.scale.setScalar(range);

@@ -81,14 +81,25 @@ function voice(vol) {
 
 // ---------------------------------------------------------------- effects
 
+// keyed by the weapon's `snd`
 const WEAPON_SFX = {
-  w1(o, t) { osc('square', 1800, 260, t, 0.16, 0.18, o); osc('sine', 3600, 900, t, 0.08, 0.08, o); },
-  w2(o, t) { for (let i = 0; i < 3; i++) noise(t + i * 0.05, 0.07, 0.35, o, 'bandpass', 3000, 900, 2); osc('square', 220, 90, t, 0.1, 0.1, o); },
-  w3(o, t) { osc('sawtooth', 520, 70, t, 0.35, 0.16, o); osc('sine', 260, 40, t, 0.4, 0.3, o); noise(t, 0.25, 0.12, o, 'bandpass', 1800, 300, 4); },
-  w4(o, t) { noise(t, 0.45, 0.3, o, 'bandpass', 400, 2500, 1.5, 0.08); osc('sine', 120, 45, t + 0.3, 0.3, 0.4, o); },
-  w5(o, t) { osc('sawtooth', 70, 1400, t, 0.5, 0.18, o, 0.05); osc('sine', 55, 30, t, 0.7, 0.45, o); noise(t + 0.1, 0.5, 0.18, o, 'highpass', 6000, 1500, 0.7); },
+  laser(o, t) { osc('square', 1800, 260, t, 0.16, 0.18, o); osc('sine', 3600, 900, t, 0.08, 0.08, o); },
+  mg(o, t) { for (let i = 0; i < 2; i++) { noise(t + i * 0.045, 0.04, 0.3, o, 'bandpass', 2400, 1400, 3); osc('square', 180, 120, t + i * 0.045, 0.04, 0.08, o); } },
+  frag(o, t) { for (let i = 0; i < 3; i++) noise(t + i * 0.05, 0.07, 0.35, o, 'bandpass', 3000, 900, 2); osc('square', 220, 90, t, 0.1, 0.1, o); },
+  ion(o, t) { osc('sine', 900, 2400, t, 0.18, 0.14, o); osc('triangle', 450, 1200, t, 0.2, 0.1, o); noise(t, 0.15, 0.1, o, 'highpass', 5000, 3000, 1); },
+  plasma(o, t) { osc('sawtooth', 520, 70, t, 0.35, 0.16, o); osc('sine', 260, 40, t, 0.4, 0.3, o); noise(t, 0.25, 0.12, o, 'bandpass', 1800, 300, 4); },
+  rail(o, t) { noise(t, 0.05, 0.5, o, 'highpass', 8000, 4000, 0.7); osc('sine', 3000, 200, t, 0.3, 0.2, o); osc('sawtooth', 120, 40, t + 0.02, 0.5, 0.2, o); },
+  missile(o, t) { noise(t, 0.45, 0.3, o, 'bandpass', 400, 2500, 1.5, 0.08); osc('sine', 120, 45, t + 0.3, 0.3, 0.4, o); },
+  torp(o, t) { noise(t, 0.7, 0.35, o, 'lowpass', 300, 1200, 2, 0.15); osc('sine', 70, 35, t + 0.1, 0.8, 0.45, o); },
+  anni(o, t) { osc('sawtooth', 70, 1400, t, 0.5, 0.18, o, 0.05); osc('sine', 55, 30, t, 0.7, 0.45, o); noise(t + 0.1, 0.5, 0.18, o, 'highpass', 6000, 1500, 0.7); },
+  photon(o, t) { for (let i = 0; i < 3; i++) osc('square', 2200 - i * 300, 600, t + i * 0.035, 0.06, 0.1, o); },
+  tentacle(o, t) { noise(t, 0.4, 0.4, o, 'lowpass', 900, 150, 3, 0.05); osc('sine', 90, 55, t, 0.45, 0.35, o, 0.05); },
+  swarm(o, t) { for (let i = 0; i < 4; i++) osc('sawtooth', 700 + i * 90, 300, t + i * 0.02, 0.05, 0.06, o); },
+  nova(o, t) { osc('sine', 60, 2000, t, 0.25, 0.2, o, 0.02); noise(t + 0.2, 0.8, 0.5, o, 'lowpass', 3000, 100, 1, 0.01); osc('sine', 80, 25, t + 0.2, 0.8, 0.5, o); },
+  spit(o, t) { noise(t, 0.3, 0.35, o, 'bandpass', 1200, 400, 5, 0.02); osc('sine', 300, 120, t, 0.2, 0.12, o); },
+  res(o, t) { for (const f of [220, 330, 440]) osc('sine', f, f * 1.5, t, 0.9, 0.12, o, 0.1); },
 };
-export function weapon(w, vol = 1) { const v = voice(vol * 0.7); if (v) (WEAPON_SFX[w] || WEAPON_SFX.w1)(v.out, v.t); }
+export function weapon(snd, vol = 1) { const v = voice(vol * 0.7); if (v) (WEAPON_SFX[snd] || WEAPON_SFX.laser)(v.out, v.t); }
 
 export function explosion(big = 1, vol = 1) {
   const v = voice(vol); if (!v) return;
