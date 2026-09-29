@@ -4,12 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Звёздные Рейнджеры P2P</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260929a">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "./js/main.js": "./js/main.js?v=20260929a",
+  "./js/ui.js": "./js/ui.js?v=20260929a",
+  "./js/sim.js": "./js/sim.js?v=20260929a",
+  "./js/net.js": "./js/net.js?v=20260929a",
+  "./js/render.js": "./js/render.js?v=20260929a",
+  "./js/data.js": "./js/data.js?v=20260929a",
+  "./js/models.js": "./js/models.js?v=20260929a",
+  "./js/audio.js": "./js/audio.js?v=20260929a",
+  "./js/nebula.js": "./js/nebula.js?v=20260929a"
 } }
 </script>
 </head>
@@ -60,7 +69,7 @@
       </label>
       <button id="shipbtn">Корабль и трюм [I]</button>
       <button id="mapbtn">Карта галактики [M]</button>
-      <div class="vol"><label title="Музыка">🎵<input type="range" id="vol-music" min="0" max="1" step="0.05"></label><label title="Звуки">🔊<input type="range" id="vol-sfx" min="0" max="1" step="0.05"></label></div>
+      <div class="vol"><button id="playerbtn" title="Проигрыватель музыки">🎵</button><label title="Громкость музыки">♪<input type="range" id="vol-music" min="0" max="1" step="0.05"></label><label title="Звуки">🔊<input type="range" id="vol-sfx" min="0" max="1" step="0.05"></label></div>
     </div>
   </div>
   <div id="planet" hidden></div>
@@ -71,6 +80,12 @@
   </div>
   <div id="bigtimer"><div class="date"></div><div class="num"></div><div class="bar"><i></i></div><div class="cap"></div></div>
   <div id="ship" hidden><button class="close" id="shipclose">✕</button><div id="shipbody"></div></div>
+  <div id="player" hidden>
+    <div class="ph"><b>🎵 Проигрыватель</b><button id="playerclose">✕</button></div>
+    <div class="pnow"></div>
+    <div id="plist"></div>
+    <div class="pbtns"><button id="pprev" title="Предыдущий трек">⏮</button><button id="pnext" title="Следующий трек">⏭</button></div>
+  </div>
   <div id="hyper" hidden></div>
   <div id="map" hidden>
     <canvas id="mapc"></canvas>
@@ -81,6 +96,6 @@
   <div id="toast"></div>
 </div>
 
-<script type="module" src="js/main.js"></script>
+<script type="module" src="js/main.js?v=20260929a"></script>
 </body>
 </html>

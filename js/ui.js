@@ -92,6 +92,46 @@ export function log(G) {
   if (stick) el.scrollTop = el.scrollHeight;
 }
 
+// ---------------------------------------------------------------- music player
+
+export function openPlayer(on = true) {
+  $('player').hidden = !on;
+  if (on) { Audio.initAudio(); player(); }
+}
+
+export function player() {
+  if ($('player').hidden) return;
+  const np = Audio.nowPlaying();
+  const key = np.mode + '|' + np.name;
+  if ($('player').dataset.k === key) return;
+  $('player').dataset.k = key;
+  $('player').querySelector('.pnow').innerHTML = `Сейчас играет: <b>${esc(np.name)}</b>${np.mode === 'auto' ? ' <small>(авто)</small>' : ''}`;
+  $('plist').innerHTML = Audio.TRACKS.map(t => {
+    const sel = t.id === np.mode, playing = np.mode === 'auto' && t.id !== 'auto' && (t.id === 'battle' ? np.battle : !np.battle && t.id === np.theme);
+    return `<button class="ptrack ${sel ? 'on' : ''}" data-track="${t.id}"><span class="pi">${sel ? '▶' : playing ? '♪' : ''}</span><span><b>${esc(t.name)}</b><small>${esc(t.desc)}</small></span></button>`;
+  }).join('');
+}
+
+export function bindPlayer() {
+  const pick = id => { Audio.playTrack(id); player(); };
+  $('playerbtn').onclick = () => openPlayer($('player').hidden);
+  $('playerclose').onclick = () => openPlayer(false);
+  $('plist').addEventListener('click', e => {
+    const b = e.target.closest('[data-track]');
+    if (b) pick(/^\d+$/.test(b.dataset.track) ? +b.dataset.track : b.dataset.track);
+  });
+  const step = d => {
+    const ids = Audio.TRACKS.map(t => t.id), np = Audio.nowPlaying();
+    const cur = np.mode === 'auto' ? (np.battle ? 'battle' : np.theme) : np.mode;
+    const i = ids.indexOf(cur);
+    let j = (i + d + ids.length) % ids.length;
+    if (ids[j] === 'auto') j = (j + d + ids.length) % ids.length; // prev/next walk through real tracks
+    pick(ids[j]);
+  };
+  $('pprev').onclick = () => step(-1);
+  $('pnext').onclick = () => step(1);
+}
+
 // ---------------------------------------------------------------- ship & cargo
 
 export function openShip(G, on = true) {

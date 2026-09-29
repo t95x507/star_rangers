@@ -347,7 +347,7 @@ function enterGame() {
   } else $('room').textContent = 'Одиночная игра (офлайн)';
   if (!G.isHost) $('room').innerHTML = `Комната: <b>${G.code}</b>`;
 
-  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G);
+  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
   $('endturn').onclick = toggleReady;
   const vs = Audio.getSettings();
   for (const kind of ['music', 'sfx']) {
@@ -381,7 +381,7 @@ function enterGame() {
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
     else if (e.code === 'KeyF') { const g = G.view.ships.get(G.me); if (g) G.view.focus(g.position); }
     else if (e.code === 'Enter') $('chat').focus();
-    else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); refreshUI(); }
+    else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); UI.openPlayer(false); refreshUI(); }
   });
   refreshUI();
   requestAnimationFrame(loop);
@@ -425,6 +425,7 @@ function loop(now) {
   }
   if (now - lastUi > 250 || wasAnimating !== animating) {
     lastUi = now;
+    UI.player();
     const me = G.st.ships[G.me];
     Audio.setTension(!!(me && !me.jump && !me.landed && Object.values(G.st.ships).some(c =>
       c.sys === me.sys && c !== me && !c.landed && !c.jump && (Sim.hostileTo(c, me) || Sim.hostileTo(me, c)) && Math.hypot(c.x - me.x, c.y - me.y) < 2200)));

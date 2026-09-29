@@ -122,13 +122,13 @@ export function ui(name, vol = 1) { const v = voice(vol); if (v && UI_SFX[name])
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 
 const THEMES = [
-  { name: 'Туманность', bar: 8, wave: 'sawtooth', cutoff: [500, 1300], padVol: 0.06, bellP: 0.28, bellRatio: 3.5, arp: null,
+  { name: 'Туманность', desc: 'тёплая, ля минор', bar: 8, wave: 'sawtooth', cutoff: [500, 1300], padVol: 0.06, bellP: 0.28, bellRatio: 3.5, arp: null,
     chords: [[45, 57, 60, 64, 67, 71], [41, 53, 57, 60, 64], [48, 55, 59, 62, 64], [43, 55, 59, 62, 66], [50, 53, 57, 60, 64], [41, 53, 57, 60, 67], [40, 52, 55, 59, 62], [45, 57, 60, 64, 71]] },
-  { name: 'Глубокий космос', bar: 11, wave: 'triangle', cutoff: [300, 800], padVol: 0.09, bellP: 0.12, bellRatio: 1.41, arp: null, drone: true,
+  { name: 'Глубокий космос', desc: 'медленная, гудящий бас', bar: 11, wave: 'triangle', cutoff: [300, 800], padVol: 0.09, bellP: 0.12, bellRatio: 1.41, arp: null, drone: true,
     chords: [[38, 50, 57, 60, 65], [36, 48, 55, 60, 64], [34, 46, 53, 58, 62], [36, 48, 55, 58, 64]] },
-  { name: 'Торговый путь', bar: 6, wave: 'sawtooth', cutoff: [700, 1800], padVol: 0.045, bellP: 0.1, bellRatio: 2, arp: [0, 2, 1, 3, 2, 4, 3, 1],
+  { name: 'Торговый путь', desc: 'светлая, ровное арпеджио', bar: 6, wave: 'sawtooth', cutoff: [700, 1800], padVol: 0.045, bellP: 0.1, bellRatio: 2, arp: [0, 2, 1, 3, 2, 4, 3, 1],
     chords: [[50, 62, 66, 69, 73], [52, 62, 66, 71, 76], [47, 59, 62, 66, 71], [55, 62, 67, 71, 74], [50, 62, 66, 69, 76], [45, 61, 64, 69, 73]] },
-  { name: 'Чужие звёзды', bar: 9, wave: 'square', cutoff: [350, 900], padVol: 0.035, bellP: 0.35, bellRatio: 2.76, arp: null, glide: true,
+  { name: 'Чужие звёзды', desc: 'тревожная, плывущие аккорды', bar: 9, wave: 'square', cutoff: [350, 900], padVol: 0.035, bellP: 0.35, bellRatio: 2.76, arp: null, glide: true,
     chords: [[40, 52, 53, 59, 64], [41, 53, 56, 60, 65], [40, 52, 55, 58, 63], [38, 50, 53, 56, 62]] },
 ];
 const THEME_BARS = 14;
@@ -143,13 +143,42 @@ let tension = 0, ambGain, battleGain, reverbSend;
 let theme = 0, themeBar = 0, nextBar = 0, nextArp = 0, nextStep = 0, bStep = 0;
 const barTimes = [];
 
+// mode: 'auto' (themes rotate, battle music when enemies are near), a theme index, or 'battle'
+let mode = 'auto';
+const battleOn = () => mode === 'battle' || (mode === 'auto' && !!tension);
+
+function applyMix(fast) {
+  if (!ctx) return;
+  const t = ctx.currentTime, on = battleOn();
+  const amb = mode === 'battle' ? 0.0001 : on ? 0.25 : 1;
+  ambGain.gain.setTargetAtTime(amb, t, fast ? 0.3 : on ? 0.6 : 2.5);
+  battleGain.gain.setTargetAtTime(on ? 1 : 0.0001, t, fast ? 0.3 : on ? 0.5 : 2.5);
+  if (on) nextStep = Math.max(nextStep, t + 0.05);
+}
+
 export function setTension(v) {
-  if (!ctx || !!v === !!tension) { tension = v; return; }
+  if (!!v === !!tension) return;
   tension = v;
-  const t = ctx.currentTime;
-  ambGain.gain.setTargetAtTime(v ? 0.25 : 1, t, v ? 0.6 : 2.5);
-  battleGain.gain.setTargetAtTime(v ? 1 : 0.0001, t, v ? 0.5 : 2.5);
-  if (v) { nextStep = Math.max(nextStep, t + 0.05); }
+  if (mode === 'auto') applyMix();
+}
+
+// music player
+export const TRACKS = [
+  { id: 'auto', name: 'Авто', desc: 'темы сменяются сами, в бою — боевая музыка' },
+  ...THEMES.map((t, i) => ({ id: i, name: t.name, desc: t.desc })),
+  { id: 'battle', name: 'Бой', desc: '132 BPM, бочка, бас и стабы' },
+];
+export function playTrack(id) {
+  mode = id;
+  if (typeof id === 'number' && ctx) {
+    theme = id; themeBar = 0;
+    nextBar = nextArp = ctx.currentTime + 0.1; // start the new theme right away, old pads fade out
+    barTimes.length = 0;
+  }
+  applyMix(true);
+}
+export function nowPlaying() {
+  return { mode, name: battleOn() ? 'Бой' : THEMES[theme].name, theme, battle: battleOn() };
 }
 export const currentTheme = () => THEMES[theme].name;
 
@@ -259,7 +288,7 @@ function startMusic() {
     if (ctx.state !== 'running') return;
     const now = ctx.currentTime, horizon = now + 1.5;
     while (nextBar < horizon) {
-      if (themeBar >= THEME_BARS) { themeBar = 0; theme = (theme + 1 + Math.floor(Math.random() * (THEMES.length - 1))) % THEMES.length; }
+      if (mode === 'auto' && themeBar >= THEME_BARS) { themeBar = 0; theme = (theme + 1 + Math.floor(Math.random() * (THEMES.length - 1))) % THEMES.length; }
       const th = THEMES[theme], ch = th.chords[themeBar % th.chords.length];
       barTimes.push([nextBar, ch, th]);
       if (barTimes.length > 4) barTimes.shift();
@@ -276,14 +305,14 @@ function startMusic() {
           pluck(mtof(ch[1 + idx % (ch.length - 1)] + 12), nextArp + k * beat / 2, 0.035);
         }
       }
-      if (Math.random() < (tension ? th.bellP * 0.5 : th.bellP)) {
+      if (Math.random() < (battleOn() ? th.bellP * 0.5 : th.bellP)) {
         const n = ch[1 + Math.floor(Math.random() * (ch.length - 1))] + (Math.random() < 0.5 ? 12 : 24);
         bell(mtof(n), nextArp + (Math.random() < 0.3 ? beat / 2 : 0), 0.05 + Math.random() * 0.04, th.bellRatio);
       }
       nextArp += beat;
     }
     // battle track is only scheduled while it can be heard
-    if (tension || battleGain.gain.value > 0.01) {
+    if (battleOn() || battleGain.gain.value > 0.01) {
       if (nextStep < now) { nextStep = now + 0.05; bStep = Math.ceil(bStep / 16) * 16; } // restart on a bar line
       while (nextStep < horizon) { battleStep(nextStep, bStep); nextStep += STEP; bStep++; }
     }
