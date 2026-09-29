@@ -216,7 +216,8 @@ export function bindShip(G) {
 export function planet(G) {
   const st = G.st, s = st.ships[G.me];
   const box = $('planet');
-  $('planetbtn').hidden = !(s && s.landed && G.planetHidden === s.landed);
+  $('planetbtn').disabled = !(s && s.landed);
+  $('planetbtn').title = s && s.landed ? '' : 'Сначала сядьте на планету';
   if (!s || !s.landed || G.planetHidden === s.landed) { box.hidden = true; return; }
   const p = findPlanet(st, s.landed);
   const sys = st.systems[p.sys];
@@ -224,7 +225,7 @@ export function planet(G) {
   box.hidden = false;
   const tab = G.planetTab || 'market';
   const btn = (label, a, dis) => `<button data-act='${JSON.stringify(a)}' ${dis ? 'disabled' : ''}>${label}</button>`;
-  let h = `<h2>${esc(p.name)}</h2><div class="meta">${D.RACES.find(r => r.id === p.race).name} · ${D.ECON[p.econ].name} экономика · техуровень ${p.tech + 1}${sys.owner === 'dom' ? ' · <span class="badp">ОККУПИРОВАНА</span>' : ''}</div>`;
+  let h = `<button class="close" data-hide="1" title="Закрыть [P]">✕</button><h2>${esc(p.name)}</h2><div class="meta">${D.RACES.find(r => r.id === p.race).name} · ${D.ECON[p.econ].name} экономика · техуровень ${p.tech + 1}${sys.owner === 'dom' ? ' · <span class="badp">ОККУПИРОВАНА</span>' : ''}</div>`;
   h += `<div class="tabs">${[['market', 'Рынок'], ['yard', 'Верфь'], ['service', 'Сервис']].map(([k, n]) => `<button data-tab="${k}" class="${tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   if (sys.owner === 'dom') {
     h += '<p>Доминаторы контролируют систему. Торговля недоступна.</p>' + btn('Взлететь', { type: 'takeoff' });
@@ -267,7 +268,7 @@ export function planet(G) {
     h += `<div class="opt"><span>Заправка ${Math.floor(s.fuel)}/${S.maxFuel}</span>${btn(fc ? fmt(fc) + ' кр' : 'полон', { type: 'refuel' }, !fc)}</div></div>`;
     h += `<p class="meta">Статистика: уничтожено кораблей — ${s.kills}.</p>`;
   }
-  h += `<div class="row">${btn('🚀 Взлететь сейчас', { type: 'takeoff' })}<button data-hide="1">Скрыть панель</button></div>`;
+  h += `<div class="row">${btn('🚀 Взлететь сейчас', { type: 'takeoff' })}</div>`;
   box.innerHTML = h;
 }
 
