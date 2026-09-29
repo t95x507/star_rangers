@@ -331,7 +331,7 @@ G.order = o => {
   const me = G.st.ships[G.me];
   if (me) {
     if (!G.isHost) me.order = o; // optimistic, the host will confirm
-    if (o.type !== 'jump') G.planetHidden = me.landed;
+    if (o && o.type !== 'jump') G.planetHidden = me.landed;
   }
   refreshUI();
 };
@@ -349,6 +349,7 @@ function enterGame() {
 
   UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
   $('endturn').onclick = toggleReady;
+  $('planetbtn').onclick = showPlanet;
   const vs = Audio.getSettings();
   for (const kind of ['music', 'sfx']) {
     const el = $('vol-' + kind);
@@ -379,12 +380,21 @@ function enterGame() {
     if (e.code === 'Space') { e.preventDefault(); toggleReady(); }
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);
+    else if (e.code === 'KeyP') { const me = G.st.ships[G.me]; if (me && me.landed && G.planetHidden !== me.landed) { G.planetHidden = me.landed; refreshUI(); } else showPlanet(); }
     else if (e.code === 'KeyF') { const g = G.view.ships.get(G.me); if (g) G.view.focus(g.position); }
     else if (e.code === 'Enter') $('chat').focus();
     else if (e.code === 'Escape') { G.sel = null; UI.openMap(G, false); UI.openShip(G, false); UI.openPlayer(false); refreshUI(); }
   });
   refreshUI();
   requestAnimationFrame(loop);
+}
+
+function showPlanet() {
+  const me = G.st.ships[G.me];
+  if (!me || !me.landed) return;
+  if (me.order && me.order.type !== 'land') G.order(null); // cancel a pending take-off
+  G.planetHidden = null;
+  refreshUI();
 }
 
 function toggleReady() {
@@ -402,6 +412,7 @@ function click(x, y) {
   if (!hit) return;
   if (hit.type === 'point') { G.sel = null; G.order({ type: 'move', x: hit.x, y: hit.y }); return; }
   G.sel = hit;
+  if (hit.type === 'planet' && me.landed === hit.id && !(me.order && me.order.type !== 'land')) { showPlanet(); return; } // our own planet: reopen its screen
   if (hit.type === 'planet') G.order({ type: 'land', planet: hit.id });
   else if (hit.type === 'loot') G.order({ type: 'loot', id: hit.id });
   else if (hit.type === 'ship') {

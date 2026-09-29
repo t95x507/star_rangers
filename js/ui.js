@@ -216,6 +216,7 @@ export function bindShip(G) {
 export function planet(G) {
   const st = G.st, s = st.ships[G.me];
   const box = $('planet');
+  $('planetbtn').hidden = !(s && s.landed && G.planetHidden === s.landed);
   if (!s || !s.landed || G.planetHidden === s.landed) { box.hidden = true; return; }
   const p = findPlanet(st, s.landed);
   const sys = st.systems[p.sys];
