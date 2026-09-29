@@ -12,6 +12,7 @@ import { buildShipModel, attachEngineGlows } from './models.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as Audio from './audio.js';
 import { buildNebulae } from './nebula.js';
+import { Trail } from './trails.js';
 
 export const ANIM_MS = 1700;
 
@@ -82,6 +83,8 @@ export class View {
     this.sysGroup = new THREE.Group(); this.scene.add(this.sysGroup);
     this.shipGroup = new THREE.Group(); this.scene.add(this.shipGroup);
     this.fxGroup = new THREE.Group(); this.scene.add(this.fxGroup);
+    this.trailGroup = new THREE.Group(); this.scene.add(this.trailGroup);
+    this._tmpV = new THREE.Vector3();
     this.glowTex = glowTexture();
     this.boomTex = glowTexture('rgba(255,255,220,1)', 'rgba(255,120,30,0.6)');
     this.hitGeo = new THREE.SphereGeometry(95, 8, 6);
@@ -155,6 +158,7 @@ export class View {
 
   buildSystem(sys) {
     this._clearGroup(this.sysGroup);
+    for (const g of this.ships.values()) this._dropTrails(g);
     this._clearGroup(this.shipGroup);
     this.ships.clear(); this.loot.clear(); this.planets.clear();
     this.sysId = sys.id; this.sysOwner = sys.owner;
@@ -198,6 +202,17 @@ export class View {
     this.focusPending = true;
   }
 
+  _dropTrails(g) {
+    for (const tr of g.userData.trails || []) { this.trailGroup.remove(tr.mesh); tr.dispose(); }
+  }
+
+  _dropShip(id, g) {
+    g.userData.el.remove();
+    this._dropTrails(g);
+    this.shipGroup.remove(g);
+    this.ships.delete(id);
+  }
+
   _makeShip(s) {
     const g = new THREE.Group();
     const model = buildShipModel(s);
@@ -219,7 +234,9 @@ export class View {
     el.style.color = '#' + new THREE.Color(s.color).getHexString();
     const lo = new CSS2DObject(el); lo.position.set(0, 0, Math.max(60, model.radius + 15)); lo.center.set(0.5, 0);
     g.add(lo);
-    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, id: s.id, mats: model.mats, engines, hull: s.eq.hull, radius: model.radius };
+    const trails = s.kind === 'citadel' ? [] : engines.map(() => new Trail(model.engineColor));
+    for (const tr of trails) this.trailGroup.add(tr.mesh);
+    g.userData = { body, label: lo, el, heading: Math.random() * 6.28, id: s.id, mats: model.mats, engines, trails, hull: s.eq.hull, radius: model.radius };
     this.shipGroup.add(g);
     this.ships.set(s.id, g);
     return g;
@@ -333,7 +350,7 @@ export class View {
       const info = s || (this._ghost && this._ghost[id]);
       if (!info) continue;
       let g = this.ships.get(id);
-      if (g && g.userData.hull !== info.eq.hull) { g.userData.el.remove(); this.shipGroup.remove(g); this.ships.delete(id); g = null; } // hull upgraded
+      if (g && g.userData.hull !== info.eq.hull) { this._dropShip(id, g); g = null; } // hull upgraded
       g ||= this._makeShip(info);
       seen.add(id);
       g.visible = !!pos.v && pos.a > 0.01;
@@ -356,6 +373,11 @@ export class View {
         e.material.opacity = 0.85 * pos.a;
         e.scale.setScalar(e.userData.base * (0.85 + Math.random() * 0.3));
       }
+      if (g.userData.trails.length) {
+        g.updateMatrixWorld(true);
+        const emitting = g.visible && pos.a > 0.3;
+        g.userData.engines.forEach((e, i) => g.userData.trails[i].update(e.getWorldPosition(this._tmpV), now, emitting, e.userData.base * 0.4 * sc, pos.a));
+      }
       const S = stats(info);
       const hp = s ? s.hull : 0;
       const el = g.userData.el;
@@ -365,7 +387,7 @@ export class View {
       el.classList.toggle('me', id === meId);
       el.classList.toggle('sel', !!selected && selected.id === id);
     }
-    for (const [id, g] of this.ships) if (!seen.has(id)) { g.userData.el.remove(); this.shipGroup.remove(g); this.ships.delete(id); }
+    for (const [id, g] of this.ships) if (!seen.has(id)) this._dropShip(id, g);
     // keep info about ships that died this turn so they can still be drawn during the animation
     if (!animating) this._ghost = {};
     for (const id in st.ships) (this._ghost ||= {})[id] = st.ships[id];
