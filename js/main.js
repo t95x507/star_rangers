@@ -350,7 +350,6 @@ function enterGame() {
   UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
   $('endturn').onclick = toggleReady;
   $('planetbtn').onclick = togglePlanet;
-  $('mybtn').onclick = focusMe;
   const vs = Audio.getSettings();
   for (const kind of ['music', 'sfx']) {
     const el = $('vol-' + kind);
