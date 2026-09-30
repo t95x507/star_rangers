@@ -51,7 +51,7 @@ export function players(G) {
   if ($('speed').value !== String(G.speed)) $('speed').value = String(G.speed);
 }
 
-// Time strip at the top: in-game date and time, how far into the day, pause status.
+// Time strip at the top: in-game date, how far into the day, pause status.
 export function turnInfo(G) {
   const box = $('bigtimer'), st = G.st;
   const T = G.view ? G.view.T : tNow(st) * SUB; // what is on screen right now, in substeps
@@ -62,7 +62,7 @@ export function turnInfo(G) {
   else if (asked.length) cap = `паузу просят: ${asked.map(p => p.name).join(', ')} (${asked.length} из ${on.length})`;
   else cap = 'Пробел — пауза' + (G.speed !== 1 ? ' · скорость ×' + G.speed : '');
   if (box.dataset.k !== cap) { box.dataset.k = cap; box.querySelector('.cap').textContent = cap; }
-  const line = (G.paused ? '⏸ ' : '') + c.hm + ' · ' + c.date;
+  const line = (G.paused ? '⏸ ' : '') + c.date;
   if (box.dataset.c !== line) { box.dataset.c = line; box.querySelector('.date').textContent = line; }
   box.querySelector('.bar i').style.width = (T % SUB) / SUB * 100 + '%'; // how far into the day
   box.classList.toggle('paused', !!G.paused);
@@ -70,16 +70,14 @@ export function turnInfo(G) {
   box.classList.toggle('fast', !G.paused && G.speed > 1);
 }
 
-// In-game calendar: day 0 = 1 January 3301, a day is SUB substeps of real time.
+// In-game calendar: day 0 = 1 January 3301.
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const MDAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 export function gameClock(t) {
   let d = Math.floor(t), year = 3301 + Math.floor(d / 365), m = 0;
   d %= 365;
   while (d >= MDAYS[m]) d -= MDAYS[m++];
-  const mins = Math.floor((t - Math.floor(t)) * 24 * 60 / 10) * 10;
-  const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
-  return { date: `${d + 1} ${MONTHS[m]} ${year} · день ${Math.floor(t)}`, hm: hh + ':' + mm };
+  return { date: `${d + 1} ${MONTHS[m]} ${year} · день ${Math.floor(t)}` };
 }
 
 export function log(G) {
