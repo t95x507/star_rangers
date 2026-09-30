@@ -118,6 +118,7 @@ td button { padding: 1px 5px; font-size: 11px; }
 #toast { position: fixed; top: 150px; left: 50%; transform: translateX(-50%); background: #3a2008; border: 1px solid var(--warn); border-radius: 6px; padding: 6px 14px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 15; }
 #toast.on { opacity: 1; }
 .host-only { display: none; }
+body:not(.debug) .debug-only { display: none !important; }
 body.is-host .host-only { display: flex; }
 
 @media (max-width: 800px) {

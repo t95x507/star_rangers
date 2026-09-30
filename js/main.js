@@ -26,6 +26,26 @@ const lobbyStatus = t => { $('l-status').textContent = t; };
 const myName = () => { const n = $('l-name').value.trim() || 'Пилот'; localStorage.setItem('sr-name', n); return n; };
 const myColor = () => { localStorage.setItem('sr-color', $('l-color').value); return parseInt($('l-color').value.slice(1), 16); };
 
+// Debug mode: press D three times quickly (anywhere but a text field). Unlocks developer tools
+// such as the ship model viewer. Remembered in this browser.
+const DEBUG_KEY = 'sr-debug';
+let debugOn = localStorage.getItem(DEBUG_KEY) === '1';
+document.body.classList.toggle('debug', debugOn);
+let dPresses = [];
+addEventListener('keydown', e => {
+  if (e.code !== 'KeyD' || e.repeat || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const now = performance.now();
+  dPresses = dPresses.filter(t => now - t < 800);
+  dPresses.push(now);
+  if (dPresses.length < 3) return;
+  dPresses = [];
+  debugOn = !debugOn;
+  localStorage.setItem(DEBUG_KEY, debugOn ? '1' : '0');
+  document.body.classList.toggle('debug', debugOn);
+  UI.toast(debugOn ? '🛠 Режим отладки включён' : 'Режим отладки выключен');
+});
+$('viewerbtn').onclick = () => open('viewer.html', '_blank');
+
 // audio may only start after a user gesture
 addEventListener('pointerdown', () => Audio.initAudio(), { once: true });
 addEventListener('keydown', () => Audio.initAudio(), { once: true });

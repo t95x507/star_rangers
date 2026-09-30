@@ -238,11 +238,9 @@ export class View {
     this.focusPending = true;
   }
 
-  // a station: its own model on a faint orbit, picked and docked like a planet
+  // a station: its own model standing still, picked and docked like a planet
   _makeStation(g, sys, p) {
     const col = D.STATIONS[p.station].col;
-    const orbit = new THREE.LineLoop(this._circleGeo(p.r, 160), new THREE.LineBasicMaterial({ color: sys.owner === 'dom' ? 0x553377 : col, transparent: true, opacity: 0.18 }));
-    g.add(orbit);
     const model = buildStation(p.station);
     const m = new THREE.Group();
     m.add(model.group);

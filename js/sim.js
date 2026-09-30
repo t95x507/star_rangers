@@ -125,7 +125,7 @@ function makePlanet(st, sysId, r, i) {
   return p;
 }
 
-// Stations orbit the star in the gaps between planets, like planets you can dock at.
+// Stations hang still at a fixed spot of the system (between planet orbits, so no planet ever runs into one).
 function addStation(st, sys, type) {
   const maxR = Math.max(...sys.planets.map(p => p.r));
   let r = 0;
@@ -133,7 +133,7 @@ function addStation(st, sys, type) {
   const used = new Set(st.systems.flatMap(x => x.planets.filter(p => p.station).map(p => p.name)));
   let name;
   for (let i = 0; i < 20; i++) { name = D.STATIONS[type].name + ' «' + pick(D.STATION_NAMES) + '»'; if (!used.has(name)) break; }
-  const p = { id: 'p' + (st.nextId++), sys: sys.id, station: type, name, r, a0: rnd(0, Math.PI * 2), w: 0.13 * Math.pow(600 / r, 1.5) * (R() < 0.5 ? 1 : -1), size: 60 };
+  const p = { id: 'p' + (st.nextId++), sys: sys.id, station: type, name, r, a0: rnd(0, Math.PI * 2), w: 0, size: 60 };
   sys.planets.push(p);
   stockStation(st, p);
   return p;
@@ -198,7 +198,10 @@ export function newGame() {
 // Old saves: add what later versions introduced.
 export function migrate(st) {
   for (const s of Object.values(st.ships)) { s.mods ||= []; s.items ||= []; if (s.shield == null) s.shield = stats(s).shieldMax; }
-  for (const sys of st.systems) for (const p of sys.planets) if (p.prices) for (const g of D.TRADE_GOODS) p.prices[g.id] ??= g.base;
+  for (const sys of st.systems) for (const p of sys.planets) {
+    if (p.prices) for (const g of D.TRADE_GOODS) p.prices[g.id] ??= g.base;
+    if (p.station) p.w = 0; // stations used to orbit
+  }
   if (!st.systems.some(sys => sys.planets.some(p => p.station))) addStations(st);
   st.bosses ||= {};
   st.v = 2;
