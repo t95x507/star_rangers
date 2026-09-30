@@ -1,6 +1,7 @@
 // DOM user interface: HUD, inventory, planet and station screens, selection, log, galaxy map.
 import * as D from './data.js';
 import * as Audio from './audio.js';
+import { QUESTS, questStart, questNode, questText, questChoices, questChoose, questParams, questFill } from './quests.js';
 import { SUB, stats, dps, cargoUsed, itemsUsed, sysDist, jumpCost, jumpDays, findPlanet, planetsOf, sellPrice, hostileTo, dist, planetPos, tNow, UPGRADE_MAX, upgradeCost, buffPrice, amnestyPrice } from './sim.js';
 
 const $ = id => document.getElementById(id);
@@ -28,6 +29,7 @@ export function hud(G) {
     `<span>📦 ${cargoUsed(s)}/${S.cargoCap}</span>` +
     `<span>⚔ ${Math.round(dps(s))}/день</span>` +
     (s.contract ? `<span title="${esc(s.contract.name)}">📜 ${s.contract.got}/${s.contract.need}</span>` : '') +
+    (s.quest ? `<span title="Задание «${esc(QUESTS[s.quest.q].title)}» — до дня ${s.quest.until}">✉ ${esc((findPlanet(st, s.quest.dest) || {}).name || '')}</span>` : '') +
     (s.wanted > 0 ? `<span class="wanted">РОЗЫСК ${s.wanted} дн.</span>` : '');
   $('hyper').hidden = !s.jump;
   if (s.jump) $('hyper').innerHTML = `Гиперпространство<br><small>${esc(st.systems[s.jump.from].name)} → ${esc(st.systems[s.jump.to].name)} · осталось ${Math.ceil(s.jump.left / SUB)} дн.</small>`;
@@ -471,7 +473,7 @@ export function bindShip(G) {
 // ---------------------------------------------------------------- planet & station screens
 
 const btn = (label, a, dis, cls = '') => `<button class="${cls}" data-act='${JSON.stringify(a)}' ${dis ? 'disabled' : ''}>${label}</button>`;
-const tabs = (list, cur, attr = 'tab') => `<div class="tabs">${list.map(([k, n]) => `<button data-${attr}="${k}" class="${cur === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
+const tabs = (list, cur, attr = 'tab') => `<div class="tabs">${list.map(([k, n, cls = '']) => `<button data-${attr}="${k}" class="${cur === k ? 'on' : ''} ${cls}">${n}</button>`).join('')}</div>`;
 
 export function planet(G) {
   const st = G.st, s = st.ships[G.me];
@@ -497,7 +499,7 @@ function planetScreen(G, s, p) {
   const st = G.st, sys = st.systems[p.sys], S = stats(s);
   const tab = G.planetTab || 'market';
   let h = `<button class="close" data-hide="1" title="Закрыть [P]">✕</button><h2>${esc(p.name)}</h2><div class="meta">${D.RACES.find(r => r.id === p.race).name} · ${D.ECON[p.econ].name} экономика · техуровень ${p.tech + 1}${sys.owner === 'dom' ? ' · <span class="badp">ОККУПИРОВАНА</span>' : ''}</div>`;
-  h += tabs([['market', 'Рынок'], ['yard', 'Верфь'], ['service', 'Сервис']], tab);
+  h += tabs([['market', 'Рынок'], ['yard', 'Верфь'], ['gov', 'Правительство', p.offer && !s.quest || s.quest && s.quest.dest === p.id ? 'hot' : ''], ['service', 'Сервис']], tab);
   if (sys.owner === 'dom') return h + '<p>Доминаторы контролируют систему. Торговля недоступна.</p>';
   if (tab === 'market') {
     const free = S.cargoCap - cargoUsed(s);
@@ -513,6 +515,7 @@ function planetScreen(G, s, p) {
     return h + '</table><div class="meta" style="margin-top:6px">Зелёным — выгодно. Цены восстанавливаются со временем.</div>';
   }
   if (tab === 'service') return h + serviceTab(s, S, p);
+  if (tab === 'gov') return h + govTab(G, s, p);
   // shipyard, by category
   const yt = G.yardTab || 'weapon';
   h += tabs([['weapon', 'Оружие'], ['module', 'Модули'], ['hull', 'Корпуса'], ['engine', 'Двигатели и баки'], ['sell', 'Продать']], yt, 'ytab');
@@ -547,6 +550,91 @@ function planetScreen(G, s, p) {
     h += '</div>';
   }
   return h + `<div class="meta">Выбор ограничен техуровнем планеты (${p.tech + 1}). Редкое снаряжение — на станциях и в добыче.</div>`;
+}
+
+// Planet government: text quest jobs.
+function govTab(G, s, p) {
+  const st = G.st, where = id => { const d = findPlanet(st, id); return d ? `${esc(d.name)} (${esc(st.systems[d.sys].name)})` : '?'; };
+  let h = '';
+  if (s.quest) {
+    const Q = QUESTS[s.quest.q], here = s.quest.dest === p.id;
+    h += `<div class="eq"><h4>Ваше задание</h4><div class="qoffer"><b>«${esc(Q.title)}»</b> — ${here ? '<span class="good">вы на месте!</span>' : 'цель: ' + where(s.quest.dest)} · награда ${fmt(s.quest.reward)} кр · до дня ${s.quest.until}<br><small style="color:var(--dim)">выдано: ${esc(s.quest.from)}</small></div><div class="row">`;
+    h += here ? `<button class="primary" data-qopen="1">${G.qrun && G.qrun.uid === s.quest.uid ? 'Продолжить задание' : 'Приступить к заданию'}</button>` : btn('Бросить задание', { type: 'dropQuest' });
+    h += '</div></div>';
+  }
+  const o = p.offer;
+  if (o && !(s.quest && s.quest.dest === p.id)) {
+    const d = findPlanet(st, o.dest);
+    const ctx = { planet: d ? d.name : '?', system: d ? st.systems[d.sys].name : '?', from: p.name, name: s.name };
+    h += `<div class="eq"><h4>Правительство планеты ${esc(p.name)} просит о помощи</h4><div class="qoffer"><b>«${esc(QUESTS[o.q].title)}»</b><br>${esc(questFill(QUESTS[o.q].brief, ctx))}<br>Награда <b>${fmt(o.reward)} кр</b>, срок ${o.days} дн.</div><div class="row">${btn('Взять задание', { type: 'takeQuest' }, !!s.quest)}</div>${s.quest ? '<div class="meta">Одновременно можно выполнять одно задание.</div>' : ''}</div>`;
+  }
+  if (!s.quest && !o) h += '<p class="meta">Сейчас у правительства нет для вас поручений. Загляните позже — или на соседние планеты.</p>';
+  return h;
+}
+
+// ---------------------------------------------------------------- text quest window
+
+export function openQuest(G, on = true) {
+  const s = G.st.ships[G.me];
+  if (on && !(s && s.quest && s.landed === s.quest.dest)) on = false;
+  $('quest').hidden = !on;
+  if (!on) return;
+  if (!G.qrun || G.qrun.uid !== s.quest.uid) {
+    const d = findPlanet(G.st, s.quest.dest);
+    G.qrun = questStart(s.quest.q, { planet: d.name, system: G.st.systems[d.sys].name, from: s.quest.from, name: s.name });
+    G.qrun.uid = s.quest.uid;
+  }
+  renderQuest(G);
+}
+
+function renderQuest(G) {
+  const run = G.qrun, box = $('quest');
+  if (!run || box.hidden) return;
+  const Q = QUESTS[run.id], n = questNode(run);
+  let h = `<div class="qhead"><b>${esc(Q.title)}</b><button class="close" data-qclose="1" title="Отложить (прогресс сохранится, пока вы на планете) [Esc]">✕</button></div>`;
+  const ps = questParams(run);
+  if (ps.length) h += '<div class="qparams">' + ps.map(([k, v, danger]) => `<span class="${danger ? 'danger' : ''}">${esc(k)}: <b>${esc(v)}</b></span>`).join('') + '</div>';
+  h += `<div class="qtext">${esc(questText(run))}</div>`;
+  if (n.end) {
+    const s = G.st.ships[G.me], win = n.end === 'win';
+    const r = s && s.quest ? Math.round(s.quest.reward * (n.reward || 1)) : 0;
+    h += `<div class="qresult ${win ? 'good' : 'badp'}">${win ? `★ Задание выполнено! Награда ${fmt(r)} кр${n.item ? ' и подарок' : ''}` : 'Задание провалено'}</div>`;
+    h += '<div class="qchoices"><button class="primary" data-qend="1">Завершить [1]</button></div>';
+  } else {
+    h += '<div class="qchoices">' + questChoices(run).map((c, i) => `<button data-qc="${i}"><span class="qn">${i + 1}</span>${esc(questFill(c.t, run.ctx))}</button>`).join('') + '</div>';
+  }
+  box.innerHTML = h;
+  box.querySelector('.qtext').scrollTop = 0;
+}
+
+// pick choice i (keys 1-9 or clicks); on an ending, report it to the host
+export function questPick(G, i) {
+  const run = G.qrun;
+  if (!run || $('quest').hidden) return false;
+  if (questNode(run).end) {
+    if (i !== 0) return true;
+    G.send({ t: 'act', a: { type: 'questEnd', node: run.node } });
+    Audio.ui(questNode(run).end === 'win' ? 'victory' : 'bad');
+    G.qrun = null;
+    $('quest').hidden = true;
+    return true;
+  }
+  if (i >= questChoices(run).length) return true;
+  Audio.ui('click');
+  questChoose(run, i);
+  renderQuest(G);
+  return true;
+}
+
+export function bindQuest(G) {
+  $('quest').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.qclose) { $('quest').hidden = true; planet(G); return; }
+    if (b.dataset.qend) return questPick(G, 0);
+    if (b.dataset.qc != null) questPick(G, +b.dataset.qc);
+  });
+  $('planet').addEventListener('click', e => { if (e.target.closest('button[data-qopen]')) openQuest(G); });
 }
 
 const STATION_TABS = {
@@ -876,6 +964,8 @@ export function drawMap(G) {
     const sts = s.planets.filter(p => p.station);
     sts.forEach((p, i) => { g.fillStyle = hex(D.STATIONS[p.station].col); g.fillRect(x - sts.length * 4 + i * 8, y - 17, 6, 6); });
     if (monsters.some(m => m.sys === s.id)) { g.fillStyle = '#ff3060'; g.font = 'bold 14px Segoe UI, sans-serif'; g.fillText('☠', x + 15, y - 8); }
+    const qd = me.quest && findPlanet(st, me.quest.dest);
+    if (qd && qd.sys === s.id) { g.fillStyle = '#ffd66b'; g.font = 'bold 13px Segoe UI, sans-serif'; g.fillText('✉', x - 16, y - 8); }
   }
   // players
   let i = 0;
@@ -894,7 +984,7 @@ export function drawMap(G) {
   }
   // info
   const info = $('mapinfo');
-  if (G.mapSel == null) { info.innerHTML = '<span style="color:var(--dim)">Кликните по системе. Зелёный круг — дальность прыжка, жёлтый — хватит топлива. Цветные квадратики — станции, ☠ — чудовище.</span>'; return; }
+  if (G.mapSel == null) { info.innerHTML = '<span style="color:var(--dim)">Кликните по системе. Зелёный круг — дальность прыжка, жёлтый — хватит топлива. Цветные квадратики — станции, ☠ — чудовище, ✉ — цель вашего задания.</span>'; return; }
   const sys = st.systems[G.mapSel];
   let h = `<b>${esc(sys.name)}</b> — ${sys.owner === 'dom' ? '<span class="badp">доминаторы</span>' : 'Коалиция'}${sys.cap > 0 ? ' <span style="color:var(--warn)">(под атакой)</span>' : ''}<br><small>Планет: ${planetsOf(sys).length}</small>`;
   for (const p of sys.planets.filter(p => p.station)) h += `<br><small style="color:${hex(D.STATIONS[p.station].col)}">■ ${esc(p.name)}</small>`;

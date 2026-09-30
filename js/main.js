@@ -294,7 +294,13 @@ function applyState(m) {
   const last = G.view.snaps[G.view.snaps.length - 1];
   if (!last || last.T < Sim.nowT(G.st)) G.view.pushTick({ T: Sim.nowT(G.st), subMs: DAY_MS / G.speed / Sim.SUB, s: snapShips(G.st) });
   const me = G.st.ships[G.me];
-  if (me && me.landed !== prevLanded) { G.planetHidden = null; if (me.landed) G.sel = null; }
+  if (me && me.landed !== prevLanded) {
+    G.planetHidden = null;
+    if (me.landed) G.sel = null;
+    // arrived where a text quest waits: the story starts right away
+    if (me.landed && me.quest && me.quest.dest === me.landed) { G.planetTab = 'gov'; UI.openQuest(G); }
+    else UI.openQuest(G, false);
+  }
   if (me && prev) {
     if (!prevLanded && me.landed) Audio.ui('land');
     else if (prevLanded && !me.landed && !me.jump) Audio.ui('takeoff');
@@ -364,7 +370,7 @@ function enterGame() {
   } else $('room').textContent = 'Одиночная игра (офлайн)';
   if (!G.isHost) $('room').innerHTML = `Комната: <b>${G.code}</b>`;
 
-  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer();
+  UI.bindPlanet(G); UI.bindSel(G); UI.bindMap(G); UI.bindShip(G); UI.bindPlayer(); UI.bindQuest(G);
   $('endturn').onclick = togglePause;
   $('planetbtn').onclick = togglePlanet;
   const vs = Audio.getSettings();
@@ -394,6 +400,11 @@ function enterGame() {
   cv.addEventListener('pointerleave', () => { G.hover = null; UI.tooltip(G, null); });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    // an open text quest takes the number keys (and Escape puts it aside)
+    if (!$('quest').hidden) {
+      if (/^Digit[1-9]$/.test(e.code) && UI.questPick(G, +e.code.slice(5) - 1)) { e.preventDefault(); return; }
+      if (e.code === 'Escape') { UI.openQuest(G, false); UI.planet(G); return; }
+    }
     if (e.code === 'Space') { e.preventDefault(); togglePause(); }
     else if (e.code === 'KeyM') UI.openMap(G, $('map').hidden);
     else if (e.code === 'KeyI') UI.openShip(G, $('ship').hidden);

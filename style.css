@@ -81,6 +81,7 @@ summary { cursor: pointer; color: var(--txt); }
 .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
 .tabs button { flex: 1; }
 .tabs button.on { background: #1e3c6c; border-color: #4a7ac0; }
+.tabs button.hot { color: #ffd66b; border-color: #a08030; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 td, th { padding: 3px 4px; text-align: left; }
 th { color: var(--dim); font-weight: normal; font-size: 11px; }
@@ -217,3 +218,19 @@ body.is-host .host-only { display: flex; }
 #ship .meta button { padding: 0 5px; font-size: 11px; }
 #planet .tabs + .tabs button { font-size: 12px; padding: 3px 4px; }
 #planet .opt span small { white-space: normal; }
+
+/* text quests */
+#quest { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; background: rgba(8, 14, 28, 0.97); border: 1px solid #3a6aa8; border-radius: 10px; padding: 14px 16px; z-index: 11; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+#quest[hidden] { display: none !important; }
+#quest .qhead { display: flex; justify-content: space-between; align-items: center; font-size: 17px; color: #ffd66b; margin-bottom: 8px; }
+#quest .qhead .close { padding: 1px 8px; }
+#quest .qparams { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; font-size: 12px; }
+#quest .qparams span { background: rgba(255,255,255,0.05); border: 1px solid var(--line); border-radius: 10px; padding: 2px 9px; color: var(--dim); }
+#quest .qparams span b { color: #fff; }
+#quest .qparams span.danger b { color: var(--warn); }
+#quest .qtext { white-space: pre-line; line-height: 1.55; font-size: 14.5px; color: #dde9fa; overflow: auto; flex: 1; min-height: 60px; padding-right: 4px; }
+#quest .qresult { margin-top: 10px; font-weight: 700; font-size: 15px; }
+#quest .qchoices { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+#quest .qchoices button { text-align: left; padding: 7px 10px; display: flex; gap: 8px; align-items: baseline; }
+#quest .qchoices .qn { color: #ffd66b; font-weight: 700; min-width: 12px; }
+.qoffer { font-size: 13px; line-height: 1.45; margin-bottom: 6px; }

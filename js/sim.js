@@ -1,6 +1,7 @@
 // Authoritative game simulation. Runs only on the host, in real time:
 // a day is SUB substeps, the host advances one substep at a time and streams the result.
 import * as D from './data.js';
+import { QUESTS, QUEST_IDS } from './quests.js';
 
 export const SUB = 20;
 export const ARRIVE_R = 2500;
@@ -184,6 +185,7 @@ export function newGame() {
   const far = [...systems].sort((a, b) => sysDist(b, systems[0]) - sysDist(a, systems[0])).slice(0, 3);
   for (const sys of far) captureSystem(st, sys, true);
   addStations(st);
+  for (const sys of systems) for (const p of planetsOf(sys)) if (R() < 0.5) p.offer = makeQuestOffer(st, p);
   // initial population
   for (const sys of systems) {
     if (sys.owner !== 'coal') continue;
@@ -203,6 +205,7 @@ export function migrate(st) {
     if (p.station) p.w = 0; // stations used to orbit
   }
   if (!st.systems.some(sys => sys.planets.some(p => p.station))) addStations(st);
+  if (!st.systems.some(sys => sys.planets.some(p => p.offer))) for (const sys of st.systems) for (const p of planetsOf(sys)) if (R() < 0.5) p.offer = makeQuestOffer(st, p);
   st.bosses ||= {};
   st.v = 2;
   return st;
@@ -454,6 +457,7 @@ export function act(st, pid, a) {
     case 'equip': return equipItem(st, s, a, say);
     case 'unequip': return unequipItem(st, s, a, say);
     case 'dropContract': if (s.contract) { say('Контракт отменён: ' + s.contract.name); s.contract = null; } return;
+    case 'dropQuest': if (s.quest) { say('Задание брошено: ' + QUESTS[s.quest.q].title); s.quest = null; } return;
   }
   if (!s.landed) return;
   const p = findPlanet(st, s.landed);
@@ -622,6 +626,35 @@ export function act(st, pid, a) {
       }
       break;
     }
+    // ---- text quests
+    case 'takeQuest': {
+      const o = p.offer;
+      if (!o || p.station || st.systems[p.sys].owner === 'dom') return;
+      if (s.quest) return say('Сначала выполните или бросьте текущее задание');
+      const dest = findPlanet(st, o.dest);
+      s.quest = { q: o.q, uid: 'q' + (st.nextId++), dest: o.dest, reward: o.reward, until: st.day + o.days, from: p.name };
+      p.offer = null; p.lastQ = o.q;
+      say('Задание принято: «' + QUESTS[o.q].title + '». Летите на ' + dest.name + ' (' + st.systems[dest.sys].name + ') до дня ' + s.quest.until + '.');
+      break;
+    }
+    case 'questEnd': { // the story is played on the player's side; the host checks where it ended and pays
+      const q = s.quest;
+      if (!q || s.landed !== q.dest) return;
+      const n = QUESTS[q.q].nodes[a.node];
+      if (!n || !n.end) return;
+      s.quest = null;
+      if (n.end !== 'win') return say('Задание провалено: «' + QUESTS[q.q].title + '»');
+      const r = Math.round(q.reward * (n.reward || 1));
+      s.credits += r;
+      let extra = '';
+      if (n.item) {
+        const id = D.randomItem(clampT(threat(st) + 0.5), 1);
+        if (itemSize(id) <= S.cargoCap - cargoUsed(s)) { s.items.push(newItem(st, id)); extra = ' и ' + D.eqDef(id).name + ' (' + D.RARITY[D.itemDef(id).rarity].name.toLowerCase() + ', в трюме)'; }
+        else { s.credits += D.itemSell(id); extra = ' и ещё ' + D.itemSell(id) + ' кр вместо подарка (трюм полон)'; }
+      }
+      say('★ Задание выполнено: «' + QUESTS[q.q].title + '». Награда ' + r + ' кр' + extra + '.');
+      break;
+    }
     case 'takeoff': {
       s.landed = null; s.order = null;
       const a2 = rnd(0, Math.PI * 2);
@@ -629,6 +662,19 @@ export function act(st, pid, a) {
       break;
     }
   }
+}
+
+// ---------------------------------------------------------------- text quest offers
+// A planet's government offers a story job on another planet, usually a jump or two away.
+function makeQuestOffer(st, p) {
+  const here = st.systems[p.sys];
+  const near = st.systems.filter(x => x.owner === 'coal' && x.id !== p.sys && sysDist(x, here) <= 36);
+  const sys = near.length && R() < 0.85 ? pick(near) : here;
+  const dests = planetsOf(sys).filter(x => x.id !== p.id);
+  if (!dests.length) return null;
+  const d = sysDist(here, sys);
+  const q = pick(QUEST_IDS.filter(id => id !== p.lastQ));
+  return { q, dest: pick(dests).id, reward: Math.round((1400 + d * 90 + threat(st) * 700) / 100) * 100, days: 8 + Math.ceil(d / 9) * 6, day: st.day };
 }
 
 // ---------------------------------------------------------------- stations
@@ -1221,6 +1267,7 @@ function endOfDay(st) {
       }
     }
     if (s.contract && st.day > s.contract.until) { log(st, 'Контракт провален — срок вышел: ' + s.contract.name, id); s.contract = null; }
+    if (s.quest && st.day > s.quest.until) { log(st, 'Задание провалено — срок вышел: «' + QUESTS[s.quest.q].title + '»', id); s.quest = null; }
   }
   for (const l of st.loot) l.ttl--;
   st.loot = st.loot.filter(l => l.ttl > 0);
@@ -1231,6 +1278,11 @@ function endOfDay(st) {
       const target = g.base * D.ECON[p.econ].mult[g.id];
       p.prices[g.id] = Math.max(5, Math.round(p.prices[g.id] + (target - p.prices[g.id]) * 0.07 + target * rnd(-0.03, 0.03)));
     }
+  }
+  // governments come up with new jobs; untaken ones go stale
+  for (const sys of st.systems) for (const p of planetsOf(sys)) {
+    if (p.offer && st.day - p.offer.day > 25) p.offer = null;
+    if (!p.offer && sys.owner === 'coal' && R() < 0.06) p.offer = makeQuestOffer(st, p);
   }
   // station shops restock every couple of weeks
   for (const sys of st.systems) for (const p of sys.planets) if (p.station && st.day - (p.stockDay ?? -99) >= 14) stockStation(st, p);

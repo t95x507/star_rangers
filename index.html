@@ -4,22 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Звёздные Рейнджеры P2P</title>
-<link rel="stylesheet" href="style.css?v=20261002d">
+<link rel="stylesheet" href="style.css?v=20261003a">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-  "./js/main.js": "./js/main.js?v=20261002d",
-  "./js/ui.js": "./js/ui.js?v=20261002d",
-  "./js/sim.js": "./js/sim.js?v=20261002d",
-  "./js/net.js": "./js/net.js?v=20261002d",
-  "./js/render.js": "./js/render.js?v=20261002d",
-  "./js/data.js": "./js/data.js?v=20261002d",
-  "./js/models.js": "./js/models.js?v=20261002d",
-  "./js/audio.js": "./js/audio.js?v=20261002d",
-  "./js/nebula.js": "./js/nebula.js?v=20261002d",
-  "./js/trails.js": "./js/trails.js?v=20261002d"
+  "./js/main.js": "./js/main.js?v=20261003a",
+  "./js/ui.js": "./js/ui.js?v=20261003a",
+  "./js/sim.js": "./js/sim.js?v=20261003a",
+  "./js/net.js": "./js/net.js?v=20261003a",
+  "./js/render.js": "./js/render.js?v=20261003a",
+  "./js/data.js": "./js/data.js?v=20261003a",
+  "./js/quests.js": "./js/quests.js?v=20261003a",
+  "./js/models.js": "./js/models.js?v=20261003a",
+  "./js/audio.js": "./js/audio.js?v=20261003a",
+  "./js/nebula.js": "./js/nebula.js?v=20261003a",
+  "./js/trails.js": "./js/trails.js?v=20261003a"
 } }
 </script>
 </head>
@@ -94,10 +95,11 @@
     <div id="mapinfo"></div>
     <button id="mapclose">✕</button>
   </div>
+  <div id="quest" hidden></div>
   <div id="tip" hidden></div>
 </div>
 <div id="toast"></div>
 
-<script type="module" src="js/main.js?v=20261002d"></script>
+<script type="module" src="js/main.js?v=20261003a"></script>
 </body>
 </html>
