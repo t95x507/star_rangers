@@ -51,7 +51,7 @@ export function players(G) {
   if ($('speed').value !== String(G.speed)) $('speed').value = String(G.speed);
 }
 
-// Big clock at the top: in-game date and time, pause status.
+// Time strip at the top: in-game date and time, how far into the day, pause status.
 export function turnInfo(G) {
   const box = $('bigtimer'), st = G.st;
   const T = G.view ? G.view.T : tNow(st) * SUB; // what is on screen right now, in substeps
@@ -61,9 +61,9 @@ export function turnInfo(G) {
   if (G.paused) cap = 'ПАУЗА · Пробел — продолжить';
   else if (asked.length) cap = `паузу просят: ${asked.map(p => p.name).join(', ')} (${asked.length} из ${on.length})`;
   else cap = 'Пробел — пауза' + (G.speed !== 1 ? ' · скорость ×' + G.speed : '');
-  const key = c.hm + '|' + cap;
-  if (box.dataset.k !== key) { box.dataset.k = key; box.querySelector('.num').textContent = G.paused ? '⏸ ' + c.hm : c.hm; box.querySelector('.cap').textContent = cap; }
-  if (box.dataset.c !== c.date) { box.dataset.c = c.date; box.querySelector('.date').textContent = c.date; }
+  if (box.dataset.k !== cap) { box.dataset.k = cap; box.querySelector('.cap').textContent = cap; }
+  const line = (G.paused ? '⏸ ' : '') + c.hm + ' · ' + c.date;
+  if (box.dataset.c !== line) { box.dataset.c = line; box.querySelector('.date').textContent = line; }
   box.querySelector('.bar i').style.width = (T % SUB) / SUB * 100 + '%'; // how far into the day
   box.classList.toggle('paused', !!G.paused);
   box.classList.toggle('urgent', !G.paused && asked.length > 0);
